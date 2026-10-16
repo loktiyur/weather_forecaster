@@ -40,16 +40,73 @@ From the terminal:
 curl http://localhost:8000/health
 ```
 
-## Checks
+## Try the API clients
 
-The same checks run in CI on every pull request. Run them before pushing:
+The REST endpoints come in Phase 2. Until then the clients can be tried from a Python shell:
 
 ```bash
-poetry run ruff check .            # lint
-poetry run ruff format --check .   # formatting (drop --check to auto-format)
-poetry run mypy                    # static type checking (strict)
-poetry run pytest                  # tests (add -v to see each test)
+poetry run python
 ```
+
+```python
+import asyncio
+from app.config import Settings
+from app.clients.http import create_http_client
+from app.clients.factory import create_geocoding_client
+from app.clients.open_meteo_weather import OpenMeteoWeatherClient
+
+
+async def main(city: str) -> None:
+    settings = Settings()
+    async with create_http_client(settings) as http:
+        location = await create_geocoding_client(settings, http).geocode(city)
+        weather = OpenMeteoWeatherClient(http, settings.open_meteo_forecast_url)
+        print(location)
+        print(await weather.get_current(location.latitude, location.longitude))
+
+
+asyncio.run(main("Prague"))
+```
+
+## Checks
+
+Tasks are defined in `pyproject.toml` under `[tool.poe.tasks]` and run with [poethepoet](https://poethepoet.natn.io/).
+CI runs exactly the same tasks.
+
+```bash
+poetry run poe format-code     # fix lint issues + format everything (run this when the format check fails)
+poetry run poe check           # everything CI runs: lint, format check, type check, tests with coverage
+```
+
+Individual tasks:
+
+```bash
+poetry run poe lint            # ruff check
+poetry run poe format-check    # ruff format --check (changes nothing)
+poetry run poe typecheck       # mypy, strict
+poetry run poe test            # pytest; extra args pass through: poe test -k geocode -v
+poetry run poe test-cov        # pytest with coverage, fails below 80 %
+poetry run poe --help          # list all tasks
+```
+
+Tip: after `eval $(poetry env activate)` the `poetry run` prefix can be dropped (`poe check`).
+
+Run a single file, a single test, or tests matching a name:
+
+```bash
+poetry run pytest tests/unit/test_weather_codes.py
+poetry run pytest tests/unit/test_weather_codes.py::test_known_codes
+poetry run pytest -k geocode
+```
+
+### Running tests from PyCharm
+
+1. **Settings → Project → Python Interpreter → Add Interpreter → Poetry Environment → Existing**,
+   pick the environment Poetry created (`poetry env info --path` prints it).
+2. **Settings → Tools → Python Integrated Tools → Testing → Default test runner: `pytest`**.
+
+After that, the green ▶ next to each `test_...` function or at the top of a file runs it with pytest.
+Running a test file as a plain Python script does not work: pytest has to collect and run the tests.
 
 Run all pre-commit hooks on the whole repository at once:
 

@@ -20,7 +20,8 @@ repos:
         name: ruff format
         entry: poetry run ruff format
         language: system
-        types: [python]
+        # ruff also formats Python code blocks inside Markdown files
+        types_or: [python, markdown]
       - id: mypy
         name: mypy
         entry: poetry run mypy

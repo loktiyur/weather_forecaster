@@ -27,17 +27,17 @@ Branch: `phase-0-setup-ci`
 ## Phase 1 — External API clients (refactor of `modules/connector.py`)
 Branch: `phase-1-clients`
 
-- [ ] `config.py` with `pydantic-settings` (replace module-level `os.environ[...]`)
-- [ ] Domain exceptions: `CityNotFoundError`, `UpstreamServiceError`, `UpstreamTimeoutError`
-- [ ] Pydantic models: `Location`, `CurrentWeather`, `DailyForecast`
-- [ ] `GeocodingClient` protocol + Open-Meteo geocoding implementation
-- [ ] (optional) GeoNames implementation from the existing `geopy` code
-- [ ] Open-Meteo weather client: `current=` and `daily=` params, returns models (no pandas)
-- [ ] WMO weather code → description mapping
-- [ ] Unit tests with `respx` + JSON fixtures: success, not found, 5xx, timeout
-- [ ] Evolve `modules/connector.py` into `app/clients/` (use `git mv` to keep its history; the prototype's flow, params and `to_thread` handling carry over)
+- [x] `config.py` with `pydantic-settings` (replace module-level `os.environ[...]`)
+- [x] Domain exceptions: `CityNotFoundError`, `UpstreamServiceError`, `UpstreamTimeoutError`
+- [x] Pydantic models: `Location`, `CurrentWeather`, `DailyForecastDay`
+- [x] `GeocodingClient` abstract base class + Open-Meteo geocoding implementation
+- [x] GeoNames implementation from the existing `geopy` code (selected with `GEOCODING_PROVIDER=geonames`)
+- [x] Open-Meteo weather client: `current=` and `daily=` params, returns models (no pandas)
+- [x] WMO weather code → description mapping
+- [x] Unit tests with `respx` + JSON fixtures: success, not found, 5xx, timeout
+- [x] Evolve `modules/connector.py` into `app/clients/` (use `git mv` to keep its history; the prototype's flow, params and `to_thread` handling carry over)
 
-**CI additions:** `pytest-cov` with coverage report; fail under 80 %
+**CI additions:** `pytest-cov` with coverage report; fail under 80 % (`pytest --cov` in CI; plain `pytest` skips coverage so single files can be run)
 
 ---
 
