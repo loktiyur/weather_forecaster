@@ -928,6 +928,24 @@ files = [
 ]
 
 [[package]]
+name = "poethepoet"
+version = "0.49.0"
+description = "A task runner that works well with poetry and uv."
+optional = false
+python-versions = ">=3.10"
+groups = ["dev"]
+files = [
+    {file = "poethepoet-0.49.0-py3-none-any.whl", hash = "sha256:97b456f3c52c9af75d4bc504e0f5cfee44545a84f446ba645a0a8f6a0131422f"},
+    {file = "poethepoet-0.49.0.tar.gz", hash = "sha256:256b72c057b5f60341bbe09498212939e558341fac4ab59d0ce478aca04f0d2a"},
+]
+
+[package.dependencies]
+pyyaml = ">=6.0.3,<7.0"
+
+[package.extras]
+poetry-plugin = ["poetry (>=1.2.0,<3.0.0) ; python_version < \"4.0\""]
+
+[[package]]
 name = "pre-commit"
 version = "4.7.0"
 description = "A framework for managing and maintaining multi-language pre-commit hooks."
@@ -1750,4 +1768,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "9378dfdc8af2762e2bd73aeb7cd2b1a29d38736fee7820f521e846ccb9bb1887"
+content-hash = "5f71a49ab750e28c04445fb36d6d399bcc2a158ee3424a4be63414febd372be3"

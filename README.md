@@ -55,6 +55,7 @@ from app.clients.http import create_http_client
 from app.clients.factory import create_geocoding_client
 from app.clients.open_meteo_weather import OpenMeteoWeatherClient
 
+
 async def main(city: str) -> None:
     settings = Settings()
     async with create_http_client(settings) as http:
@@ -63,20 +64,32 @@ async def main(city: str) -> None:
         print(location)
         print(await weather.get_current(location.latitude, location.longitude))
 
+
 asyncio.run(main("Prague"))
 ```
 
 ## Checks
 
-The same checks run in CI on every pull request. Run them before pushing:
+Tasks are defined in `pyproject.toml` under `[tool.poe.tasks]` and run with [poethepoet](https://poethepoet.natn.io/).
+CI runs exactly the same tasks.
 
 ```bash
-poetry run ruff check .            # lint
-poetry run ruff format --check .   # formatting (drop --check to auto-format)
-poetry run mypy                    # static type checking (strict)
-poetry run pytest                  # tests (add -v to see each test)
-poetry run pytest --cov            # tests + coverage report, fails below 80 % (what CI runs)
+poetry run poe format-code     # fix lint issues + format everything (run this when the format check fails)
+poetry run poe check           # everything CI runs: lint, format check, type check, tests with coverage
 ```
+
+Individual tasks:
+
+```bash
+poetry run poe lint            # ruff check
+poetry run poe format-check    # ruff format --check (changes nothing)
+poetry run poe typecheck       # mypy, strict
+poetry run poe test            # pytest; extra args pass through: poe test -k geocode -v
+poetry run poe test-cov        # pytest with coverage, fails below 80 %
+poetry run poe --help          # list all tasks
+```
+
+Tip: after `eval $(poetry env activate)` the `poetry run` prefix can be dropped (`poe check`).
 
 Run a single file, a single test, or tests matching a name:
 
