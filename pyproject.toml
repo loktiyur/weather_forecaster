@@ -1,0 +1,53 @@
+[project]
+name = "weather-forecaster"
+version = "0.1.0"
+description = "Async REST API that shows the current weather and forecast for a city."
+authors = [{ name = "Yurii Loktionov", email = "yurii.loktionov@proton.me" }]
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi (>=0.143.2,<0.144.0)",
+    "uvicorn[standard] (>=0.54.0,<0.55.0)",
+]
+
+[dependency-groups]
+dev = [
+    "pytest (>=9.1.1,<10.0.0)",
+    "pytest-asyncio (>=1.4.0,<2.0.0)",
+    "httpx (>=0.28.1,<0.29.0)",
+    "ruff (>=0.17.1,<0.18.0)",
+    "mypy (>=2.4.0,<3.0.0)",
+    "pre-commit (>=4.7.0,<5.0.0)",
+]
+
+[tool.poetry]
+package-mode = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# The prototype connector is refactored into app/clients/ in Phase 1.
+extend-exclude = ["modules"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # isort
+    "B",       # bugbear
+    "UP",      # pyupgrade
+    "SIM",     # simplify
+    "ASYNC",   # async pitfalls (blocking calls in async code)
+    "RUF",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["app", "tests"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
