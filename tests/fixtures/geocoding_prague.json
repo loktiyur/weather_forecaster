@@ -1,0 +1,20 @@
+{
+    "results": [
+        {
+            "id": 3067696,
+            "name": "Prague",
+            "latitude": 50.08804,
+            "longitude": 14.42076,
+            "elevation": 202.0,
+            "feature_code": "PPLC",
+            "country_code": "CZ",
+            "admin1_id": 3067695,
+            "timezone": "Europe/Prague",
+            "population": 1165581,
+            "country_id": 3077311,
+            "country": "Czechia",
+            "admin1": "Prague"
+        }
+    ],
+    "generationtime_ms": 0.10359287
+}

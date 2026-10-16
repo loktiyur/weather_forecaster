@@ -36,5 +36,5 @@ jobs:
       - name: Mypy
         run: poetry run mypy
 
-      - name: Pytest
-        run: poetry run pytest -v
+      - name: Pytest with coverage
+        run: poetry run pytest -v --cov

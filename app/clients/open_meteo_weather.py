@@ -1,60 +1,136 @@
-import asyncio
-import pandas as pd
-from geopy import geocoders
+import datetime as dt
+from typing import Any
+
 import httpx
-import os
-from dotenv import load_dotenv
+from pydantic import BaseModel, ValidationError
 
-##Username for the GeoNames(Should be probably later moved to the config file)
-load_dotenv()
-geo_name = os.environ["GEONAMES_USERNAME"]
+from app.clients.http import get_json
+from app.core.exceptions import UpstreamServiceError
+from app.core.weather_codes import describe_weather_code
+from app.schemas.weather import CurrentWeather, DailyForecastDay, Units
 
-##Connetcting and getting the coordinates of the city
-async def get_place_coordinates(city_name:str, geo_name:str):
-    try:
-        gn = geocoders.GeoNames(username= geo_name)
-        location = await asyncio.to_thread(gn.geocode,city_name)
-        if location is None:
-            print("Error: Unable to geocode the city name. Please check the city name or GeoNames username.")
-            raise ValueError("Geocoding failed")
+SERVICE = "Open-Meteo Forecast"
 
-    except Exception as e:
-            raise RuntimeError(f"Error during geocoding: {e}")
-    return location.latitude, location.longitude
+CURRENT_VARIABLES = [
+    "temperature_2m",
+    "relative_humidity_2m",
+    "apparent_temperature",
+    "is_day",
+    "weather_code",
+    "wind_speed_10m",
+]
+DAILY_VARIABLES = [
+    "weather_code",
+    "temperature_2m_max",
+    "temperature_2m_min",
+    "relative_humidity_2m_mean",
+    "sunrise",
+    "sunset",
+]
+MAX_FORECAST_DAYS = 16
 
-async def get_forecast(city_name:str, geo_name:str):
 
-    ##Getting the coordinates of the place
-    try:
-        latitude, longitude = await get_place_coordinates(city_name, geo_name)
-        if latitude is None or longitude is None:
-            raise ValueError("Invalid coordinates received from geocoding.")
-    except Exception as e:
-        raise RuntimeError(f"Getting coordinates failed: {e}")
+class _CurrentBlock(BaseModel):
+    time: dt.datetime
+    temperature_2m: float
+    relative_humidity_2m: float
+    apparent_temperature: float
+    is_day: int
+    weather_code: int
+    wind_speed_10m: float
 
-    ##Setting up important parameters
-    ##hourly_forecast_variables = ["wind_speed_10m", "temperature_2m", "relative_humidity_2m"]  not used in the current implementation
-    timezone = "auto"
-    params = {
-        'latitude': latitude,
-        'longitude': longitude,
-        ##'hourly': hourly_forecast_variables,  not used for now
-        'daily': ["temperature_2m_max", "temperature_2m_min",'relative_humidity_2m_mean', "sunrise", "sunset"],
-        'timezone': timezone
-    }
 
-    ##Connecting to the Open-Meteo API and getting the forecast data
-    async with httpx.AsyncClient() as client:
-        response = await client.get("https://api.open-meteo.com/v1/forecast", params=params)
-        response.raise_for_status()  # Raise an error for bad responses
+class _DailyBlock(BaseModel):
+    """Open-Meteo returns daily data column-wise: one list per variable."""
 
-    ##Converting the response to JSON making it a datafarame and returning it
-    data = response.json()
-    daily_forecast = data.get("daily")
+    time: list[dt.date]
+    weather_code: list[int | None]
+    temperature_2m_max: list[float | None]
+    temperature_2m_min: list[float | None]
+    relative_humidity_2m_mean: list[float | None]
+    sunrise: list[dt.datetime | None]
+    sunset: list[dt.datetime | None]
 
-    if daily_forecast is None:
-        raise ValueError("Error: Unable to get the forecast data. Please check the API response")
 
-    daily_forecast_df = pd.DataFrame(daily_forecast)
+class OpenMeteoWeatherClient:
+    """https://open-meteo.com/en/docs: free, no API key."""
 
-    return daily_forecast_df
+    def __init__(self, http: httpx.AsyncClient, url: str) -> None:
+        self._http = http
+        self._url = url
+
+    async def get_current(
+        self, latitude: float, longitude: float, *, units: Units = Units.METRIC
+    ) -> CurrentWeather:
+        params = self._base_params(latitude, longitude, units)
+        params["current"] = ",".join(CURRENT_VARIABLES)
+
+        data = await get_json(self._http, self._url, params, service=SERVICE)
+        try:
+            current = _CurrentBlock.model_validate(data.get("current"))
+        except ValidationError as exc:
+            raise UpstreamServiceError(SERVICE, f"unexpected 'current' block: {exc}") from exc
+
+        return CurrentWeather(
+            time=current.time,
+            temperature=current.temperature_2m,
+            apparent_temperature=current.apparent_temperature,
+            relative_humidity=current.relative_humidity_2m,
+            wind_speed=current.wind_speed_10m,
+            weather_code=current.weather_code,
+            description=describe_weather_code(current.weather_code),
+            is_day=bool(current.is_day),
+        )
+
+    async def get_daily_forecast(
+        self, latitude: float, longitude: float, *, days: int = 7, units: Units = Units.METRIC
+    ) -> list[DailyForecastDay]:
+        if not 1 <= days <= MAX_FORECAST_DAYS:
+            raise ValueError(f"days must be between 1 and {MAX_FORECAST_DAYS}")
+
+        params = self._base_params(latitude, longitude, units)
+        params["daily"] = ",".join(DAILY_VARIABLES)
+        params["forecast_days"] = days
+
+        data = await get_json(self._http, self._url, params, service=SERVICE)
+        try:
+            daily = _DailyBlock.model_validate(data.get("daily"))
+            # Turn the columns into one row per day; strict=True catches columns of unequal length.
+            rows = zip(
+                daily.time,
+                daily.weather_code,
+                daily.temperature_2m_max,
+                daily.temperature_2m_min,
+                daily.relative_humidity_2m_mean,
+                daily.sunrise,
+                daily.sunset,
+                strict=True,
+            )
+            return [
+                DailyForecastDay(
+                    date=date,
+                    weather_code=code,
+                    description=describe_weather_code(code) if code is not None else None,
+                    temperature_max=t_max,
+                    temperature_min=t_min,
+                    relative_humidity_mean=humidity,
+                    sunrise=sunrise,
+                    sunset=sunset,
+                )
+                for date, code, t_max, t_min, humidity, sunrise, sunset in rows
+            ]
+        except (ValidationError, ValueError) as exc:
+            raise UpstreamServiceError(SERVICE, f"unexpected 'daily' block: {exc}") from exc
+
+    @staticmethod
+    def _base_params(latitude: float, longitude: float, units: Units) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "latitude": latitude,
+            "longitude": longitude,
+            # Times are returned in the local time of the place.
+            "timezone": "auto",
+        }
+        if units is Units.IMPERIAL:
+            params["temperature_unit"] = "fahrenheit"
+            params["wind_speed_unit"] = "mph"
+        return params

@@ -27,7 +27,7 @@ Implementation phases and progress are tracked in [ROADMAP.md](ROADMAP.md). The 
 | N3 | Clear, consistent error responses (`404` unknown city, `502/504` upstream problems, `422` bad input). |
 | N4 | Configuration via environment variables only, no secrets in code. |
 | N5 | Tested with pytest; upstream APIs mocked; CI runs lint + type check + tests. |
-| N6 | Runs with one command: `docker compose up`. |
+| N6 | Infrastructure (Postgres, Redis) starts with one command: `docker compose up`; the full stack including the app with `docker compose --profile full up`. |
 
 ---
 
@@ -54,7 +54,7 @@ The stack follows the skills listed in my CV (Python, asyncio, REST APIs, Postgr
 | Dependency mgmt | **Poetry** | Lock file, dev dependency groups. |
 | Testing | **pytest**, **pytest-asyncio**, **respx** (mock httpx), **fakeredis**, `httpx.ASGITransport` | Unit + API tests without hitting real services. |
 | Code quality | **ruff** (lint + format), **mypy**, **pre-commit** | Consistent, type-checked code. |
-| Containers | **Docker** (multi-stage) + **docker compose** | API + Postgres + Redis locally with one command. |
+| Containers | **Docker** (multi-stage) + **docker compose** | Postgres, Redis and a test Postgres for local development; the app's own image for CI and deployment (`full` profile). |
 | CI | **GitHub Actions** | Lint → type-check → tests on every push/PR. |
 | Frontend (minimal) | **Jinja2 template** served by FastAPI (or a small Vue.js page) | A single form "enter city → show weather". |
 | Deploy (optional) | **GCP Cloud Run** + Memorystore + Cloud SQL, provisioned with **Terraform** | Matches CV experience; not required for the core project. |
@@ -65,20 +65,27 @@ The stack follows the skills listed in my CV (Python, asyncio, REST APIs, Postgr
 
 ## 3. High-level architecture
 
+The diagram shows the **local development** setup: the FastAPI app runs directly on the host (Poetry virtualenv, `uvicorn --reload`), and Docker Compose runs only the infrastructure it needs.
+
 ```mermaid
 flowchart LR
     user([User<br/>browser / curl])
 
-    subgraph compose[docker compose]
-        subgraph api[FastAPI service]
+    subgraph host["Host machine (poetry run uvicorn --reload)"]
+        subgraph api[FastAPI app]
             routes[API layer<br/>routers + Pydantic schemas]
             service[Service layer<br/>WeatherService]
             clients[Client layer<br/>GeocodingClient<br/>WeatherClient]
             repo[Repository layer<br/>SearchHistoryRepository]
             cache[CacheService]
         end
-        redis[(Redis<br/>cache)]
-        pg[(PostgreSQL<br/>search history)]
+        tests[pytest]
+    end
+
+    subgraph compose[docker compose]
+        redis[("Redis<br/>port 6379")]
+        pg[("PostgreSQL db<br/>port 5432, volume")]
+        pgtest[("PostgreSQL db-test<br/>port 5433, tmpfs")]
     end
 
     geo[[Open-Meteo<br/>Geocoding API]]
@@ -93,7 +100,20 @@ flowchart LR
     clients -- httpx async --> meteo
     service --> repo
     repo -- SQLAlchemy async --> pg
+    tests -. integration tests .-> pgtest
 ```
+
+### Runtime setups
+
+| Setup | Command | FastAPI runs | Containers |
+|-------|---------|--------------|------------|
+| **Local development** | `docker compose up -d` + `poetry run uvicorn app.main:app --reload` | On the host | `redis`, `db`, `db-test` |
+| **Tests** | `poetry run pytest` | In-process (ASGI transport) | `db-test` (from Phase 4). External APIs are mocked, Redis is faked |
+| **Full stack** | `docker compose --profile full up` | In the `api` container | `api`, `redis`, `db` |
+| **CI** | GitHub Actions | In-process for tests; the image is built and smoke-tested | GitHub service containers (Postgres) |
+| **Production** (optional) | Terraform + Cloud Run | Cloud Run container | Managed: Memorystore, Cloud SQL |
+
+The `api` image exists even though development happens on the host, because the image is what gets deployed and what CI checks.
 
 ### Layers and responsibilities
 
@@ -266,10 +286,12 @@ weather_forecaster/
 │   ├── services/
 │   │   └── weather_service.py   # orchestration: geocode → cache → fetch → history
 │   ├── clients/
-│   │   ├── base.py              # GeocodingClient Protocol
+│   │   ├── base.py              # GeocodingClient abstract base class
 │   │   ├── open_meteo_geocoding.py
 │   │   ├── geonames_geocoding.py   # optional, existing geopy logic moved here
-│   │   └── open_meteo_weather.py   # evolved from modules/connector.py
+│   │   ├── open_meteo_weather.py   # evolved from modules/connector.py
+│   │   ├── http.py              # shared AsyncClient factory + get_json error mapping
+│   │   └── factory.py           # picks the geocoding provider from settings
 │   ├── cache/
 │   │   └── redis_cache.py
 │   ├── db/
@@ -291,7 +313,7 @@ weather_forecaster/
 │   └── api/                     # endpoint tests via httpx.AsyncClient + ASGITransport
 ├── .github/workflows/ci.yml
 ├── Dockerfile
-├── docker-compose.yml           # api, postgres, redis
+├── docker-compose.yml           # redis, db, db-test; api under the `full` profile
 ├── pyproject.toml               # Poetry + ruff + mypy + pytest config
 ├── .env.example
 ├── .pre-commit-config.yaml
