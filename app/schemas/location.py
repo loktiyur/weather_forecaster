@@ -4,10 +4,20 @@ from pydantic import BaseModel, Field
 class Location(BaseModel):
     """A place resolved from the name the user typed."""
 
-    name: str
-    country: str | None = None
-    country_code: str | None = Field(default=None, description="ISO-3166 alpha-2 code")
-    region: str | None = Field(default=None, description="First-level region, e.g. a state")
-    latitude: float = Field(ge=-90, le=90)
-    longitude: float = Field(ge=-180, le=180)
-    timezone: str | None = None
+    name: str = Field(examples=["Prague"])
+    country: str | None = Field(default=None, examples=["Czechia"])
+    country_code: str | None = Field(
+        default=None, description="ISO-3166 alpha-2 code", examples=["CZ"]
+    )
+    region: str | None = Field(
+        default=None, description="First-level region, e.g. a state", examples=["Prague"]
+    )
+    latitude: float = Field(ge=-90, le=90, examples=[50.08804])
+    longitude: float = Field(ge=-180, le=180, examples=[14.42076])
+    timezone: str | None = Field(default=None, examples=["Europe/Prague"])
+
+
+class LocationSearchResponse(BaseModel):
+    """Wrapped in an object (not a bare list) so fields can be added without breaking clients."""
+
+    results: list[Location]

@@ -1,6 +1,6 @@
 [project]
 name = "weather-forecaster"
-version = "0.1.0"
+version = "0.2.0"
 description = "Async REST API that shows the current weather and forecast for a city."
 authors = [{ name = "Yurii Loktionov", email = "yurii.loktionov@proton.me" }]
 readme = "README.md"

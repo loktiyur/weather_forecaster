@@ -181,7 +181,7 @@ Base path: `/api/v1` (versioned so the contract can evolve). Interactive docs at
 |--------|------|-------------|-------------|
 | `GET` | `/api/v1/weather/current` | `city` (str, 1–100 chars, required), `country` (ISO-2, optional), `units` (`metric`\|`imperial`, default `metric`) | Current weather for the city. |
 | `GET` | `/api/v1/weather/forecast` | `city`, `country`, `units`, `days` (1–16, default 7) | Daily forecast. |
-| `GET` | `/api/v1/locations/search` | `q`, `limit` (1–10) | Candidate places for an ambiguous name (autocomplete). |
+| `GET` | `/api/v1/locations/search` | `q`, `country`, `limit` (1–10, default 5) | Candidate places for an ambiguous name (autocomplete). Returns `{"results": [...]}`, empty list if nothing matches. |
 | `GET` | `/api/v1/history` | `limit` (1–50, default 10) | Most recent searches. |
 | `GET` | `/api/v1/history/popular` | `limit` | Most searched cities (`GROUP BY` + `COUNT`). |
 | `GET` | `/health` | — | Liveness: app is running. |
@@ -195,12 +195,13 @@ Base path: `/api/v1` (versioned so the contract can evolve). Interactive docs at
     "name": "Prague",
     "country": "Czechia",
     "country_code": "CZ",
-    "latitude": 50.088,
-    "longitude": 14.4208,
+    "region": "Prague",
+    "latitude": 50.08804,
+    "longitude": 14.42076,
     "timezone": "Europe/Prague"
   },
   "current": {
-    "time": "2026-10-16T14:00",
+    "time": "2026-10-16T14:00:00",
     "temperature": 12.4,
     "apparent_temperature": 10.9,
     "relative_humidity": 71,
@@ -214,6 +215,8 @@ Base path: `/api/v1` (versioned so the contract can evolve). Interactive docs at
 }
 ```
 
+`cached` is added in Phase 3 together with Redis.
+
 ### Error format
 
 All errors share one shape, produced by custom exception handlers:
@@ -222,11 +225,26 @@ All errors share one shape, produced by custom exception handlers:
 { "error": { "code": "CITY_NOT_FOUND", "message": "No place found for 'Pragu'." } }
 ```
 
+Validation errors also list every invalid field:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid request parameters.",
+    "details": [
+      { "field": "days", "location": "query", "message": "Input should be less than or equal to 16" }
+    ]
+  }
+}
+```
+
 | Situation | Exception (domain) | HTTP status |
 |-----------|-------------------|-------------|
 | Invalid query parameter | FastAPI `RequestValidationError` | `422` |
+| Unknown URL / wrong method | Starlette `HTTPException` | `404` / `405` |
 | Geocoding returned no results | `CityNotFoundError` | `404` |
-| Upstream returned 5xx / bad JSON | `UpstreamServiceError` | `502` |
+| Upstream returned 4xx/5xx / bad JSON | `UpstreamServiceError` (detail logged, generic message returned) | `502` |
 | Upstream timeout | `UpstreamTimeoutError` | `504` |
 | Redis down | logged, request continues **without cache** | `200` |
 
@@ -274,6 +292,7 @@ weather_forecaster/
 │   ├── api/
 │   │   ├── dependencies.py      # get_weather_service, get_session, ...
 │   │   ├── errors.py            # exception handlers → JSON error format
+│   │   ├── queries.py           # Pydantic models for query parameters
 │   │   └── routes/
 │   │       ├── weather.py
 │   │       ├── locations.py
@@ -282,11 +301,12 @@ weather_forecaster/
 │   ├── schemas/                 # Pydantic models (API contract + domain)
 │   │   ├── location.py
 │   │   ├── weather.py
+│   │   ├── errors.py            # ErrorResponse
 │   │   └── history.py
 │   ├── services/
 │   │   └── weather_service.py   # orchestration: geocode → cache → fetch → history
 │   ├── clients/
-│   │   ├── base.py              # GeocodingClient abstract base class
+│   │   ├── base.py              # GeocodingClient (ABC), WeatherClient (Protocol)
 │   │   ├── open_meteo_geocoding.py
 │   │   ├── geonames_geocoding.py   # optional, existing geopy logic moved here
 │   │   ├── open_meteo_weather.py   # evolved from modules/connector.py

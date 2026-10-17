@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
+from typing import Protocol
 
 from app.core.exceptions import CityNotFoundError
 from app.schemas.location import Location
+from app.schemas.weather import CurrentWeather, DailyForecastDay, Units
 
 
 class GeocodingClient(ABC):
@@ -19,3 +21,15 @@ class GeocodingClient(ABC):
         if not results:
             raise CityNotFoundError(name)
         return results[0]
+
+
+class WeatherClient(Protocol):
+    """Weather data for coordinates. `OpenMeteoWeatherClient` satisfies it structurally."""
+
+    async def get_current(
+        self, latitude: float, longitude: float, *, units: Units = Units.METRIC
+    ) -> CurrentWeather: ...
+
+    async def get_daily_forecast(
+        self, latitude: float, longitude: float, *, days: int = 7, units: Units = Units.METRIC
+    ) -> list[DailyForecastDay]: ...
