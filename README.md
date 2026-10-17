@@ -28,45 +28,46 @@ poetry run uvicorn app.main:app --reload
 
 | URL | What you get |
 |-----|--------------|
-| http://localhost:8000/health | `{"status":"ok"}`: the app is running |
-| http://localhost:8000/docs | Swagger UI: interactive API docs, try endpoints from the browser |
+| http://localhost:8000/docs | Swagger UI: interactive API docs, try every endpoint from the browser |
 | http://localhost:8000/redoc | ReDoc: alternative read-only API docs |
+| http://localhost:8000/health | `{"status":"ok"}`: the app is running |
 
-There is no page at `/` yet, so it returns `{"detail":"Not Found"}`. The city search page arrives in Phase 6.
+There is no page at `/` yet (it returns a `NOT_FOUND` error). The city search page arrives in Phase 6.
 
-From the terminal:
+## API
+
+| Endpoint | Query parameters |
+|----------|------------------|
+| `GET /api/v1/weather/current` | `city` (required), `country` (ISO code, e.g. `CZ`), `units` (`metric` / `imperial`) |
+| `GET /api/v1/weather/forecast` | same as above + `days` (1-16, default 7) |
+| `GET /api/v1/locations/search` | `q` (required), `country`, `limit` (1-10, default 5) |
+| `GET /health` | |
 
 ```bash
-curl http://localhost:8000/health
+curl "http://localhost:8000/api/v1/weather/current?city=Prague"
+curl "http://localhost:8000/api/v1/weather/current?city=Paris&country=US&units=imperial"
+curl "http://localhost:8000/api/v1/weather/forecast?city=Kyiv&days=3"
+curl "http://localhost:8000/api/v1/locations/search?q=Springfield&limit=3"
 ```
 
-## Try the API clients
-
-The REST endpoints come in Phase 2. Until then the clients can be tried from a Python shell:
+Every error uses the same format:
 
 ```bash
-poetry run python
+curl "http://localhost:8000/api/v1/weather/current?city=Qwertyuiopxyz"
+# 404 {"error":{"code":"CITY_NOT_FOUND","message":"No place found for 'Qwertyuiopxyz'."}}
+
+curl "http://localhost:8000/api/v1/weather/forecast?city=Prague&days=40"
+# 422 {"error":{"code":"VALIDATION_ERROR","message":"Invalid request parameters.",
+#      "details":[{"field":"days","location":"query","message":"Input should be less than or equal to 16"}]}}
 ```
 
-```python
-import asyncio
-from app.config import Settings
-from app.clients.http import create_http_client
-from app.clients.factory import create_geocoding_client
-from app.clients.open_meteo_weather import OpenMeteoWeatherClient
-
-
-async def main(city: str) -> None:
-    settings = Settings()
-    async with create_http_client(settings) as http:
-        location = await create_geocoding_client(settings, http).geocode(city)
-        weather = OpenMeteoWeatherClient(http, settings.open_meteo_forecast_url)
-        print(location)
-        print(await weather.get_current(location.latitude, location.longitude))
-
-
-asyncio.run(main("Prague"))
-```
+| Status | `code` | When |
+|--------|--------|------|
+| 404 | `CITY_NOT_FOUND` | No place matches the name |
+| 404 / 405 | `NOT_FOUND` / `METHOD_NOT_ALLOWED` | Unknown URL / wrong HTTP method |
+| 422 | `VALIDATION_ERROR` | Invalid query parameters (`details` lists each one) |
+| 502 | `UPSTREAM_ERROR` | Open-Meteo / GeoNames returned an error |
+| 504 | `UPSTREAM_TIMEOUT` | Open-Meteo / GeoNames did not answer in time |
 
 ## Checks
 

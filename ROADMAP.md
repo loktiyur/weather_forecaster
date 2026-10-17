@@ -44,13 +44,14 @@ Branch: `phase-1-clients`
 ## Phase 2 — REST API layer
 Branch: `phase-2-api`
 
-- [ ] `create_app()` + lifespan managing a shared `httpx.AsyncClient`
-- [ ] `WeatherService` (geocode → fetch), injected via `Depends`
-- [ ] `GET /api/v1/weather/current`, `GET /api/v1/weather/forecast`, `GET /api/v1/locations/search`
-- [ ] Query validation (`city` length, `days` 1–16, `units` enum)
-- [ ] Exception handlers → unified error JSON (404 / 422 / 502 / 504)
-- [ ] API tests via `httpx.AsyncClient` + `ASGITransport` and `dependency_overrides`
-- [ ] Check Swagger at `/docs` looks clean (descriptions, examples)
+- [x] `create_app()` + lifespan managing a shared `httpx.AsyncClient`
+- [x] `WeatherService` (geocode → fetch), injected via `Depends`; depends on `GeocodingClient` / `WeatherClient` interfaces
+- [x] `GET /api/v1/weather/current`, `GET /api/v1/weather/forecast`, `GET /api/v1/locations/search`
+- [x] Query validation with Pydantic query models (`city` length + whitespace trimming, `country` ISO code, `days` 1–16, `units` enum)
+- [x] Exception handlers → unified error JSON (404 / 405 / 422 / 502 / 504), upstream details logged, not leaked
+- [x] API tests via `httpx.AsyncClient` + `ASGITransport` and `dependency_overrides`
+- [x] Check Swagger at `/docs` looks clean (descriptions, examples, documented error responses)
+- [ ] `Cache-Control` response headers *(moved to Phase 3, together with the Redis TTLs)*
 
 **CI additions:** none required (coverage gate now covers the API)
 
@@ -62,6 +63,7 @@ Branch: `phase-3-redis`
 - [ ] `docker-compose.yml` for local infrastructure (the app itself runs locally with `uvicorn --reload`): `redis` service
 - [ ] `redis.asyncio` client in lifespan, `REDIS_URL` setting
 - [ ] `CacheService` with keys/TTLs from ARCHITECTURE.md §6
+- [ ] `Cache-Control: max-age` headers matching the TTLs (REST "cacheable" constraint)
 - [ ] `cached: true/false` in responses
 - [ ] Graceful degradation when Redis is unavailable
 - [ ] Unit tests with `fakeredis`: hit, miss, Redis down
