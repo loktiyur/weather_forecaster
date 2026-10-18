@@ -11,6 +11,7 @@ concurrency:
 
 jobs:
   checks:
+    # The name is a required status check in the `main` ruleset: renaming it breaks the rule.
     name: Lint, type-check, test
     runs-on: ubuntu-latest
     steps:
@@ -37,5 +38,43 @@ jobs:
       - name: Type check
         run: poetry run poe typecheck
 
-      - name: Tests with coverage
+      - name: Unit + API tests
+        run: poetry run poe test-unit
+
+  redis-integration:
+    name: Redis integration
+    runs-on: ubuntu-latest
+    services:
+      # Official image, pulled by GitHub and started next to the job (nothing is built).
+      # Mapped to 6380 like the local `redis-test` container, so the defaults match.
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_REDIS_URL: redis://localhost:6380/0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Integration tests
+        run: poetry run poe test-integration -v
+
+      # Coverage needs the whole suite in one run, so it lives in the job that has Redis.
+      - name: All tests with coverage gate
         run: poetry run poe test-cov

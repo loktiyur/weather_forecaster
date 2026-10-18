@@ -1,0 +1,38 @@
+# Local infrastructure. The app itself runs on the host:
+#   docker compose up -d
+#   poetry run uvicorn app.main:app --reload
+
+services:
+  # Cache for local development.
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    # Append-only file keeps the cache across restarts; the memory limit + LRU eviction
+    # make Redis behave like a cache (drop least recently used keys) instead of failing writes.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Separate instance for integration tests: tests flush it, so it must never be the dev cache.
+  redis-test:
+    image: redis:7.4-alpine
+    ports:
+      - "6380:6379"
+    # No persistence at all: every start is empty.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:

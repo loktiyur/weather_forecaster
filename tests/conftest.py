@@ -11,12 +11,17 @@ from app.clients.open_meteo_weather import OpenMeteoWeatherClient
 from app.config import Settings
 from app.main import create_app
 from app.services.weather_service import WeatherService
+from tests.doubles import InMemoryCache
+
+# Nothing listens on port 1: tests that build the app from settings must never
+# touch the developer's Redis. Integration tests use their own Redis (tests/integration).
+UNREACHABLE_REDIS_URL = "redis://localhost:1/0"
 
 
 @pytest.fixture
 def settings() -> Settings:
     # _env_file=None: tests must not depend on the developer's local .env
-    return Settings(_env_file=None)
+    return Settings(_env_file=None, redis_url=UNREACHABLE_REDIS_URL, redis_timeout_seconds=0.2)
 
 
 @pytest.fixture
@@ -27,11 +32,19 @@ async def http() -> AsyncIterator[httpx.AsyncClient]:
 
 
 @pytest.fixture
-def weather_service(settings: Settings, http: httpx.AsyncClient) -> WeatherService:
+def cache() -> InMemoryCache:
+    return InMemoryCache()
+
+
+@pytest.fixture
+def weather_service(
+    settings: Settings, http: httpx.AsyncClient, cache: InMemoryCache
+) -> WeatherService:
     """The real service and clients; only the network is mocked (respx)."""
     return WeatherService(
         geocoding=OpenMeteoGeocodingClient(http, settings.open_meteo_geocoding_url),
         weather=OpenMeteoWeatherClient(http, settings.open_meteo_forecast_url),
+        cache=cache,
     )
 
 

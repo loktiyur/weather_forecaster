@@ -1,6 +1,6 @@
 [project]
 name = "weather-forecaster"
-version = "0.2.0"
+version = "0.3.0"
 description = "Async REST API that shows the current weather and forecast for a city."
 authors = [{ name = "Yurii Loktionov", email = "yurii.loktionov@proton.me" }]
 readme = "README.md"
@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-settings (>=2.16.0,<3.0.0)",
     "httpx (>=0.28.1,<0.29.0)",
     "geopy (>=2.5.0,<3.0.0)",
+    "redis (>=8.1.0,<9.0.0)",
 ]
 
 [dependency-groups]
@@ -61,6 +62,10 @@ pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+addopts = "--strict-markers"
+markers = [
+    "integration: needs real infrastructure (locally: docker compose up -d redis-test)",
+]
 
 [tool.coverage.run]
 # Used by `pytest --cov` (CI always runs it). Plain `pytest` skips coverage,
@@ -82,6 +87,8 @@ format-code = { sequence = [
 lint = { cmd = "ruff check .", help = "Lint" }
 format-check = { cmd = "ruff format --check .", help = "Check formatting without changing files" }
 typecheck = { cmd = "mypy", help = "Static type checking (strict)" }
-test = { cmd = "pytest", help = "Run tests; extra args are passed through, e.g. poe test -k geocode" }
-test-cov = { cmd = "pytest -v --cov", help = "Run tests with the 80 % coverage gate" }
+test = { cmd = "pytest", help = "Run all tests; extra args are passed through, e.g. poe test -k geocode" }
+test-unit = { cmd = "pytest -m 'not integration'", help = "Unit + API tests, no infrastructure needed" }
+test-integration = { cmd = "pytest -m integration", help = "Tests against real Redis (docker compose up -d redis-test)" }
+test-cov = { cmd = "pytest -v --cov", help = "Run all tests with the 80 % coverage gate" }
 check = { sequence = ["lint", "format-check", "typecheck", "test-cov"], help = "Everything CI runs" }

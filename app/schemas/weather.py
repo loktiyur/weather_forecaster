@@ -50,9 +50,11 @@ class CurrentWeatherResponse(BaseModel):
     location: Location
     current: CurrentWeather
     units: UnitLabels
+    cached: bool = Field(description="True when the weather data came from the cache")
 
 
 class ForecastResponse(BaseModel):
     location: Location
     daily: list[DailyForecastDay]
     units: UnitLabels
+    cached: bool = Field(description="True when the weather data came from the cache")
