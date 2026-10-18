@@ -92,3 +92,4 @@ test-unit = { cmd = "pytest -m 'not integration'", help = "Unit + API tests, no 
 test-integration = { cmd = "pytest -m integration", help = "Tests against real Redis (docker compose up -d redis-test)" }
 test-cov = { cmd = "pytest -v --cov", help = "Run all tests with the 80 % coverage gate" }
 check = { sequence = ["lint", "format-check", "typecheck", "test-cov"], help = "Everything CI runs" }
+smoke-test = { cmd = "bash scripts/smoke_test.sh", help = "Smoke-test a running API (default http://localhost:8000), e.g. after docker compose --profile full up" }

@@ -1,0 +1,11 @@
+# Allow-list: the build context contains ONLY what the API image needs.
+# Everything else (.git, .env, tests, caches, docs, frontend/) is never sent to Docker,
+# so secrets cannot end up in an image by accident and builds stay fast.
+*
+!app/
+!pyproject.toml
+!poetry.lock
+
+# ...and even inside app/, no compiled files from the host
+**/__pycache__
+**/*.py[cod]

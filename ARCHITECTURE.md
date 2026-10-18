@@ -596,6 +596,7 @@ weather_forecaster/
 │   └── integration/              # real Redis (redis-test); fail if Docker is down
 ├── frontend/                     # Vue app (layout in §9)
 ├── .github/workflows/ci.yml
+├── scripts/smoke_test.sh         # end-to-end check of a running stack (CI + poe smoke-test)
 ├── Dockerfile                    # api image
 ├── .dockerignore
 ├── docker-compose.yml            # redis, redis-test; profile full: api, web
@@ -666,7 +667,7 @@ All jobs run on every pull request and are required checks in the `main` ruleset
 |-----|-------|------|
 | `Lint, type-check, test` | ruff, format check, mypy strict, unit + API tests · `Architecture` step (import-linter) from Phase 7 | Phase 0 |
 | `Redis integration` | `redis:7.4-alpine` service container, integration tests | Phase 3 |
-| `Docker image` | build the `api` (and `web`) images, start the `full` profile, smoke-test `/health/ready`, a weather request and the web page | Phase 4 |
+| `Docker image` | build the `api` (and `web` from Phase 5) images, start the `full` profile, run `scripts/smoke_test.sh`: readiness, a real weather request, the cache hit, the error format (and the web page from Phase 5) | Phase 4 |
 | `Frontend` | `npm ci`, lint, `vue-tsc`, Vitest, build, generated API types up to date | Phase 5 |
 | `Postgres integration` | `postgres:16-alpine` service container, `alembic upgrade head`, `alembic check`, Postgres integration tests | Phase 8 |
 | `Coverage` | merges coverage from the test jobs, applies the 80 % gate (until Phase 8 the gate runs in `Redis integration`) | Phase 8 |
