@@ -9,7 +9,7 @@ Async REST API that shows the current weather and a daily forecast for a city en
 
 - Python 3.12
 - [Poetry](https://python-poetry.org/) 2.x (`brew install poetry` on macOS)
-- Docker with Docker Compose (for Redis)
+- Docker with Docker Compose (for Redis, and to run the whole app in containers)
 
 ## Setup
 
@@ -19,9 +19,17 @@ cp .env.example .env              # local settings (never committed)
 poetry run pre-commit install     # run the checks automatically on every git commit
 ```
 
+## Two ways to run
+
+| | Development | Full stack |
+|---|---|---|
+| App runs | on your machine (`uvicorn --reload`, restarts on every change) | in the `api` container (the image that gets deployed) |
+| Docker runs | Redis only | Redis + the app |
+| Use it for | writing code, debugging | checking the real image, demos |
+
 ## Infrastructure (Docker)
 
-Docker Compose runs only the infrastructure; the app runs on your machine.
+In development Docker Compose runs only the infrastructure; the app runs on your machine.
 
 ```bash
 docker compose up -d       # start Redis (dev, port 6379) and redis-test (port 6380)
@@ -52,6 +60,30 @@ poetry run uvicorn app.main:app --reload
 | http://localhost:8000/health/ready | `200` if Redis is reachable, `503` if not |
 
 There is no page at `/` yet (it returns a `NOT_FOUND` error). The web frontend arrives in Phase 5 (see ROADMAP.md).
+
+## Run the full stack in Docker
+
+```bash
+docker compose --profile full up -d --build    # build the API image, start api + redis
+docker compose --profile full ps               # api should be "healthy"
+poetry run poe smoke-test                      # end-to-end check against http://localhost:8000
+docker compose --profile full logs -f api      # follow the API logs (Ctrl+C to stop following)
+docker compose --profile full down             # stop everything
+```
+
+The app is at the same URLs as above (http://localhost:8000/docs, ...). Stop a running dev server first,
+or use another host port: `API_PORT=8001 docker compose --profile full up -d`.
+
+- Without `--profile full`, `docker compose up` still starts only the infrastructure.
+- The container reads optional settings from `.env` (e.g. `GEOCODING_PROVIDER`), but always uses
+  `REDIS_URL=redis://redis:6379/0`, the Redis container's name inside the Compose network.
+- The image runs as a non-root user and contains only `app/` and its runtime dependencies
+  (no tests, no `.env`, no dev tools). `.dockerignore` is an allow-list, so nothing else can slip in.
+- Docker's healthcheck uses `/health` (liveness): a Redis outage makes `/health/ready` return `503`,
+  but the container stays healthy and keeps answering, just without the cache.
+
+`poe smoke-test` calls the real Open-Meteo API once, because its job is to prove the running
+container works end to end; the test suite itself never calls external APIs.
 
 ## API
 
@@ -157,12 +189,13 @@ poetry run poe --help            # list all tasks
 
 ### CI
 
-Two jobs run on every pull request; both are required checks for merging into `main`:
+Three jobs run on every pull request; all are required checks for merging into `main`:
 
 | Job | Steps |
 |-----|-------|
 | `Lint, type-check, test` | lint, format check, mypy, unit + API tests |
 | `Redis integration` | starts `redis:7.4-alpine` as a service container, runs the integration tests, then all tests with the coverage gate |
+| `Docker image` | builds the API image, starts the full stack with Compose, runs `scripts/smoke_test.sh` against it |
 
 Tip: after `eval $(poetry env activate)` the `poetry run` prefix can be dropped (`poe check`).
 

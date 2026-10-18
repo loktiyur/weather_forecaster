@@ -99,14 +99,16 @@ Branch: `phase-4-docker`
 
 Development keeps running the app on the host (`uvicorn --reload`). The image is what gets deployed and what CI checks.
 
-- [ ] Multi-stage `Dockerfile` for the API: Poetry installs into a virtualenv in a build stage → slim Python runtime stage, non-root user, `HEALTHCHECK` on `/health`
-- [ ] `.dockerignore` (tests, caches, `.git`, `.env`, `frontend/node_modules`)
-- [ ] `api` service in `docker-compose.yml` under the `full` profile, with `REDIS_URL=redis://redis:6379/0` and `depends_on: redis (healthy)`
-- [ ] `docker compose --profile full up` starts the whole basic app (api + redis); `docker compose up` still starts only the infrastructure
-- [ ] Image runs Uvicorn without `--reload`, settings only from environment variables
-- [ ] README: development mode vs full stack
+- [x] Multi-stage `Dockerfile` for the API: Poetry installs into a virtualenv in a build stage → slim Python runtime stage, non-root user, `HEALTHCHECK` on `/health`
+- [x] `.dockerignore` as an allow-list: only `app/`, `pyproject.toml` and `poetry.lock` reach the build (no tests, caches, `.git`, `.env`, `frontend/`)
+- [x] `api` service in `docker-compose.yml` under the `full` profile, with `REDIS_URL=redis://redis:6379/0` and `depends_on: redis (healthy)`
+- [x] `docker compose --profile full up` starts the whole basic app (api + redis); `docker compose up` still starts only the infrastructure
+- [x] Image runs Uvicorn without `--reload`, settings only from environment variables
+- [x] Host port configurable (`API_PORT`, default 8000)
+- [x] `scripts/smoke_test.sh` + `poe smoke-test`: readiness, OpenAPI, a real weather request, the cache hit, the error format
+- [x] README: development mode vs full stack
 
-**CI additions:** new job `Docker image`: build the image · start the `full` profile · smoke test `curl /health/ready` and one weather request · shut down. Required check in the ruleset.
+**CI additions:** new job `Docker image`: build the image (layer cache between runs) · start the `full` profile and wait for healthchecks · `scripts/smoke_test.sh` · container logs on failure · shut down. Required check in the ruleset.
 
 ---
 
@@ -144,6 +146,7 @@ Branch: `phase-6-release`
 - [ ] Retries with `tenacity` for transient upstream errors (timeouts, 5xx), with backoff and a small attempt limit
 - [ ] Structured logging (JSON in containers, readable locally) with a request id middleware (`X-Request-ID` in responses and logs)
 - [ ] `LOG_LEVEL` setting
+- [ ] Docker healthcheck requests (`/health`) kept out of the access log
 - [ ] README: screenshots, quick start (`docker compose --profile full up`), API examples, links to the docs
 - [ ] `CHANGELOG.md`
 - [ ] Tag `v1.0.0`

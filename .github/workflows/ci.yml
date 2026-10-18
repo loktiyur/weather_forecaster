@@ -78,3 +78,35 @@ jobs:
       # Coverage needs the whole suite in one run, so it lives in the job that has Redis.
       - name: All tests with coverage gate
         run: poetry run poe test-cov
+
+  docker-image:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Same image as `docker compose build`; layers are cached between CI runs.
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: weather-forecaster-api:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start full stack
+        run: docker compose --profile full up --detach --no-build --wait --wait-timeout 90
+
+      - name: Smoke test
+        run: bash scripts/smoke_test.sh http://localhost:8000
+
+      - name: Container logs
+        if: failure()
+        run: docker compose --profile full logs
+
+      - name: Shut down
+        if: always()
+        run: docker compose --profile full down --volumes

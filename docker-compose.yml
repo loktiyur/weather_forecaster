@@ -1,6 +1,9 @@
-# Local infrastructure. The app itself runs on the host:
+# Development (infrastructure only; the app runs on the host):
 #   docker compose up -d
 #   poetry run uvicorn app.main:app --reload
+#
+# Full stack (the app in a container too):
+#   docker compose --profile full up -d --build
 
 services:
   # Cache for local development.
@@ -33,6 +36,25 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  # The API image (Dockerfile). Only started with the `full` profile.
+  api:
+    profiles: ["full"]
+    build: .
+    image: weather-forecaster-api:local
+    ports:
+      - "${API_PORT:-8000}:8000"   # API_PORT=8001 if the dev server already uses 8000
+    # Optional .env for settings like GEOCODING_PROVIDER; `environment` below wins over it,
+    # so a REDIS_URL meant for the host (localhost) can never leak into the container.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   redis-data:
