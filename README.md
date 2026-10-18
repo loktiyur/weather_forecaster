@@ -51,7 +51,7 @@ poetry run uvicorn app.main:app --reload
 | http://localhost:8000/health | `{"status":"ok"}`: the app is running |
 | http://localhost:8000/health/ready | `200` if Redis is reachable, `503` if not |
 
-There is no page at `/` yet (it returns a `NOT_FOUND` error). The city search page arrives in Phase 6.
+There is no page at `/` yet (it returns a `NOT_FOUND` error). The web frontend arrives in Phase 5 (see ROADMAP.md).
 
 ## API
 

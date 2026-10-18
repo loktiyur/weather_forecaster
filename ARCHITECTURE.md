@@ -1,196 +1,523 @@
 # Weather Forecaster — Architecture
 
-A small async REST API that returns the **current weather** (and a short daily forecast) for a city entered by the user.
+A weather app built like a production system: an async FastAPI backend, a Vue frontend, Redis caching, Docker and a CI pipeline that guards every change. It grows in two releases:
 
-The project is deliberately small, but it is built like a production backend service: layered code, typed contracts, async I/O, caching, persistence, tests, containerisation and CI. The goal is to show understanding of **API design** and of the **popular Python backend stack**.
+| Release | What the user gets | Status |
+|---------|--------------------|--------|
+| **1.0: basic weather app** | Type a city → current weather and a daily forecast, ambiguous names resolved, metric / imperial | Backend done (Phases 0–3); Docker and frontend in Phases 4–6 |
+| **2.0: weather, trips and statistics** | Accounts, a trip builder showing the weather for every stop, saved places with a dashboard, statistics about searches | Phases 7–12 |
 
-Implementation phases and progress are tracked in [ROADMAP.md](ROADMAP.md). The CI pipeline is set up in Phase 0, and every later phase is merged into `main` through a PR that must pass it.
+Every section below is marked **v1.0** (exists or is part of the basic release) or **v2.0** (target of the second release). Phases and progress: [ROADMAP.md](ROADMAP.md).
+
+The goal of the project is to show understanding of **API design**, of the **popular Python backend stack** and of **architecture decisions**. Where there was a real choice, this document says what was chosen and why.
 
 ---
 
 ## 1. Requirements
 
 ### Functional
-| # | Requirement |
-|---|-------------|
-| F1 | The user enters a city name and gets the current weather (temperature, feels-like, humidity, wind, weather description). |
-| F2 | The user can request a daily forecast for 1–16 days (min/max temperature, humidity, sunrise/sunset). |
-| F3 | Ambiguous names are handled: the API returns the resolved place (name, country, coordinates) so the user sees *which* "Springfield" was used. Optional `country` filter. |
-| F4 | The service stores search history and exposes the most recent / most popular searches. |
-| F5 | A minimal web page (or CLI) lets a user type a city and see the result. |
+
+| # | Requirement | Release |
+|---|-------------|---------|
+| F1 | The user enters a city name and gets the current weather (temperature, feels-like, humidity, wind, description). | v1.0 |
+| F2 | The user can see a daily forecast for 1–16 days (min/max temperature, humidity, sunrise/sunset). | v1.0 |
+| F3 | Ambiguous names are handled: the user sees *which* place was used and can pick another one (e.g. Paris, France vs Paris, Texas). | v1.0 |
+| F4 | A web page lets the user do all of the above without tools like curl. | v1.0 |
+| F5 | Users can register, log in and set preferences (units, language, home place). | v2.0 |
+| F6 | Users can build trips from stops (place + dates) and see the weather for every stop on its own dates. | v2.0 |
+| F7 | Users can save places and see the current weather for all of them on a dashboard. | v2.0 |
+| F8 | Users see statistics about their searches; everyone sees the most popular places. | v2.0 |
 
 ### Non-functional
+
 | # | Requirement |
 |---|-------------|
-| N1 | Fully async I/O (no blocking calls inside the event loop). |
-| N2 | Upstream calls are cached (Redis) to stay fast and respect free API limits. |
-| N3 | Clear, consistent error responses (`404` unknown city, `502/504` upstream problems, `422` bad input). |
-| N4 | Configuration via environment variables only, no secrets in code. |
-| N5 | Tested with pytest; upstream APIs mocked; CI runs lint + type check + tests. |
-| N6 | Infrastructure (Postgres, Redis) starts with one command: `docker compose up`; the full stack including the app with `docker compose --profile full up`. |
+| N1 | Fully async I/O: no blocking calls inside the event loop. |
+| N2 | Upstream calls are cached (Redis) to stay fast and respect the free API limits. A cache outage makes the app slower, never broken. |
+| N3 | Clear, consistent error responses (one JSON format for every error). |
+| N4 | Configuration via environment variables only; no secrets in code or in the repository. |
+| N5 | Tested without calling external APIs; real Redis/Postgres in Docker for integration tests; every PR must pass CI. |
+| N6 | The whole app starts with one command: `docker compose --profile full up`. |
+| N7 | (v2.0) Module boundaries are enforced automatically in CI, not only described here. |
 
 ---
 
 ## 2. Tech stack
 
-The stack follows the skills listed in my CV (Python, asyncio, REST APIs, PostgreSQL, Redis, Docker, pytest, Poetry, mocking, GCP/Terraform) and adds the de-facto standard Python web libraries around them.
+Widely used, well-maintained tools with a clear job each; the reason for every choice is in the tables.
+
+### Backend
+
+| Concern | Choice | Why | Release |
+|---------|--------|-----|---------|
+| Language | **Python 3.12** | Modern typing, fast asyncio | v1.0 |
+| Web framework | **FastAPI** + **Uvicorn** | Async-first, OpenAPI generated from types, dependency injection | v1.0 |
+| Validation | **Pydantic v2**, **pydantic-settings** | Request/response models, typed settings from env vars | v1.0 |
+| HTTP client | **httpx** (`AsyncClient`) | Async, timeouts, connection pooling, easy to mock | v1.0 |
+| Weather data | **Open-Meteo** Forecast + Geocoding APIs | Free, no API key | v1.0 |
+| Alternative geocoder | **GeoNames** via `geopy` | Kept from the prototype; sync library run in a worker thread | v1.0 |
+| Cache | **Redis 7** + `redis.asyncio` | TTL cache, shared between processes | v1.0 |
+| Retries | **tenacity** | Backoff for transient upstream errors | v1.0 (Phase 6) |
+| Logging | **structlog** | Structured logs with a request id | v1.0 (Phase 6) |
+| Database | **PostgreSQL 16**, one schema per service | Data we keep: users, trips, places, statistics | v2.0 |
+| ORM / migrations | **SQLAlchemy 2.0 async** + **asyncpg**, **Alembic** | Typed models, async sessions, versioned schema changes | v2.0 |
+| Auth | **PyJWT**, **pwdlib** (Argon2) | JWT in an httpOnly cookie, modern password hashing | v2.0 |
+| Architecture checks | **import-linter** | Module dependency rules enforced in CI | v2.0 |
+
+### Frontend
 
 | Concern | Choice | Why |
 |---------|--------|-----|
-| Language | **Python 3.12** | Modern typing (`X \| None`, generics), fast asyncio. |
-| Web framework | **FastAPI** | Async-first, OpenAPI/Swagger docs generated from types, dependency injection. |
-| ASGI server | **Uvicorn** | Standard production server for FastAPI. |
-| Validation / schemas | **Pydantic v2** | Request/response models, validation of upstream JSON. |
-| Settings | **pydantic-settings** | Typed config from env vars / `.env` (replaces the raw `os.environ[...]` call). |
-| HTTP client | **httpx (AsyncClient)** | Async, timeouts, connection pooling, easy to mock. Already used in `modules/connector.py`. |
-| Geocoding | **Open-Meteo Geocoding API** (default), GeoNames (optional) | Open-Meteo geocoding is free, keyless and async-friendly via httpx. The current `geopy` GeoNames client is synchronous and needs `asyncio.to_thread`; it can stay as an alternative implementation behind the same interface. |
-| Weather data | **Open-Meteo Forecast API** | Free, no API key, `current` and `daily` parameters. |
-| Cache | **Redis** + `redis.asyncio` | TTL cache for geocoding and weather responses. |
-| Database | **PostgreSQL** | Search history. |
-| ORM / driver | **SQLAlchemy 2.0 (async)** + **asyncpg** | Typed `Mapped[...]` models, async sessions. |
-| Migrations | **Alembic** | Versioned schema changes. |
-| Retries | **tenacity** | Retry transient upstream failures with exponential backoff. |
-| Logging | **structlog** (or stdlib `logging` with JSON formatter) | Structured logs with request id. |
-| Dependency mgmt | **Poetry** | Lock file, dev dependency groups. |
-| Testing | **pytest**, **pytest-asyncio**, **respx** (mock httpx), `httpx.ASGITransport`, real **Redis/Postgres in Docker** for integration tests | Unit + API tests never call external APIs; tests marked `integration` run against real infrastructure instead of fakes. |
-| Code quality | **ruff** (lint + format), **mypy**, **pre-commit** | Consistent, type-checked code. |
-| Containers | **Docker** (multi-stage) + **docker compose** | Redis and Postgres plus separate test instances (`redis-test`, `db-test`) for local development; the app's own image for CI and deployment (`full` profile). |
-| CI | **GitHub Actions** | Lint → type-check → tests on every push/PR. |
-| Frontend (minimal) | **Jinja2 template** served by FastAPI (or a small Vue.js page) | A single form "enter city → show weather". |
-| Deploy (optional) | **GCP Cloud Run** + Memorystore + Cloud SQL, provisioned with **Terraform** | Matches CV experience; not required for the core project. |
+| Framework | **Vue 3** (Composition API) + **TypeScript** (strict) | Component-based, typed; fits interactive pages like the trip editor |
+| Build / dev server | **Vite** | Fast dev server with an `/api` proxy, small production builds |
+| Routing / state | **Vue Router**, **Pinia** (from v2.0, for the logged-in user) | Standard Vue tooling |
+| API client | **openapi-typescript** + **openapi-fetch** | Types generated from the backend's OpenAPI schema: the contract is checked at compile time |
+| Quality | **ESLint**, **Prettier**, **vue-tsc**, **Vitest** + Vue Test Utils | Lint, type check, component tests |
+| Serving | **nginx** (in the `web` image) | Serves the built files, proxies `/api` to the backend |
 
-> **Not used on purpose:** `pandas`. The current connector converts the response into a DataFrame, but an API returns JSON, so Pydantic models are the right shape. Pandas adds a heavy dependency for no benefit here. gRPC/RabbitMQ are also out of scope: a single service with one client has no need for them (see *Possible extensions*).
+### Tooling and delivery
+
+| Concern | Choice |
+|---------|--------|
+| Dependencies | **Poetry** (backend), **npm** (frontend) |
+| Tasks | **poethepoet** (`poe check`, `poe test-unit`, …) |
+| Code quality | **ruff**, **mypy** (strict), **pre-commit** |
+| Testing | **pytest**, **pytest-asyncio**, **respx**, `httpx.ASGITransport`, real Redis/Postgres in Docker |
+| Containers | **Docker** (multi-stage images) + **docker compose** (profiles) |
+| CI/CD | **GitHub Actions**, images pushed to **GitHub Container Registry** on release tags |
+| Deploy (optional) | **GCP Cloud Run** + Memorystore + Cloud SQL, provisioned with **Terraform** |
+
+> **Not used on purpose:** `pandas` (an API returns JSON, Pydantic models are the right shape), fakeredis (real Redis in Docker instead). gRPC and RabbitMQ are listed as extensions (§15), where they would have a real job.
 
 ---
 
-## 3. High-level architecture
+## 3. Architecture style: modular monolith
 
-The diagram shows the **local development** setup: the FastAPI app runs directly on the host (Poetry virtualenv, `uvicorn --reload`), and Docker Compose runs only the infrastructure it needs.
+**One deployable backend and one database, divided inside into services with strict, one-way dependencies.**
+
+- **One deployable unit.** The backend is one image, one process and one migration history. Services talk to each other through ordinary function calls: no network hops between them, no partial failures between parts of the same request, and a single database transaction can cover a whole operation (e.g. creating a trip with all its stops).
+- **Services are real boundaries.** Each service (weather, trips, stats) owns its code folder, its database schema and its endpoints. Other services reach it only through its service class, so its tables and internals can change without touching anyone else.
+- **Dependencies point one way.** Everything may use `core`; `trips` may use `weather`; `weather` knows nothing about `trips` or `stats`. A service can therefore be understood, tested and changed on its own, and the code cannot slowly turn into a web where everything imports everything.
+- **Shared relational data stays consistent.** Trips, saved places and statistics all refer to the same users and places. In one database these links are foreign keys and joins, so the database itself guarantees that no trip points at a place or user that does not exist.
+- **Events where independence matters.** Statistics are fed by events (`LocationSearched`) instead of direct calls. Weather never waits for statistics and keeps working if the stats service is slow or broken.
+- **Enforced, not only documented.** The dependency rules (§6) are import-linter contracts checked in CI; a forbidden import fails the pipeline.
+- **Room to grow.** Because each service already has its own schema and a narrow interface, any of them could later be moved into its own deployment, and the event bus is the single place where a message broker would plug in.
+
+---
+
+## 4. System overview (v1.0)
+
+### Full stack: `docker compose --profile full up`
 
 ```mermaid
 flowchart LR
-    user([User<br/>browser / curl])
+    user([Browser])
 
-    subgraph host["Host machine (poetry run uvicorn --reload)"]
-        subgraph api[FastAPI app]
-            routes[API layer<br/>routers + Pydantic schemas]
-            service[Service layer<br/>WeatherService]
-            clients[Client layer<br/>GeocodingClient<br/>WeatherClient]
-            repo[Repository layer<br/>SearchHistoryRepository]
-            cache[Cache layer<br/>Cache → RedisCache]
-        end
-        tests[pytest]
-    end
-
-    subgraph compose[docker compose]
-        redis[("Redis<br/>port 6379, volume")]
-        redistest[("Redis redis-test<br/>port 6380, no persistence")]
-        pg[("PostgreSQL db<br/>port 5432, volume")]
-        pgtest[("PostgreSQL db-test<br/>port 5433, tmpfs")]
+    subgraph compose["docker compose --profile full"]
+        web["web<br/>nginx: Vue app<br/>port 8080"]
+        api["api<br/>FastAPI + Uvicorn"]
+        redis[("redis<br/>cache")]
     end
 
     geo[[Open-Meteo<br/>Geocoding API]]
     meteo[[Open-Meteo<br/>Forecast API]]
 
-    user -- "GET /api/v1/weather/current?city=Prague" --> routes
-    routes --> service
-    service --> cache
-    cache <--> redis
-    service --> clients
-    clients -- httpx async --> geo
-    clients -- httpx async --> meteo
-    service --> repo
-    repo -- SQLAlchemy async --> pg
-    tests -. integration tests .-> redistest
-    tests -. integration tests .-> pgtest
+    user -- "GET /" --> web
+    user -- "GET /api/v1/..." --> web
+    web -- "proxy /api" --> api
+    api <--> redis
+    api -- httpx --> geo
+    api -- httpx --> meteo
 ```
+
+The browser only talks to `web`. nginx serves the Vue app and forwards `/api/...` to the `api` container, so frontend and API share one origin (no CORS).
+
+### Development mode
+
+```mermaid
+flowchart LR
+    user([Browser])
+
+    subgraph host[Host machine]
+        vite["Vite dev server<br/>npm run dev<br/>port 5173"]
+        uvicorn["FastAPI<br/>poetry run uvicorn --reload<br/>port 8000"]
+        tests[pytest]
+    end
+
+    subgraph compose["docker compose up -d"]
+        redis[("redis<br/>port 6379")]
+        redistest[("redis-test<br/>port 6380")]
+    end
+
+    user --> vite
+    vite -- "proxy /api" --> uvicorn
+    uvicorn <--> redis
+    tests -. integration tests .-> redistest
+```
+
+Both apps run on the host and reload on save; Docker runs only the infrastructure. From v2.0 Compose also runs `db` (port 5432) and `db-test` (port 5433).
 
 ### Runtime setups
 
-| Setup | Command | FastAPI runs | Containers |
+| Setup | Command | Backend runs | Containers |
 |-------|---------|--------------|------------|
-| **Local development** | `docker compose up -d` + `poetry run uvicorn app.main:app --reload` | On the host | `redis`, `redis-test`, `db`, `db-test` |
-| **Unit + API tests** | `poetry run poe test-unit` | In-process (ASGI transport) | None. External APIs are mocked with respx, the cache is an in-memory test double |
-| **Integration tests** | `poetry run poe test-integration` | In-process | `redis-test` (Phase 3), `db-test` (Phase 4) |
-| **Full stack** | `docker compose --profile full up` | In the `api` container | `api`, `redis`, `db` |
-| **CI** | GitHub Actions, jobs `checks` + `Redis integration` (see §9) | In-process for tests; the image is built and smoke-tested (Phase 5) | `Redis integration` job only: GitHub service containers (Redis, later Postgres) |
-| **Production** (optional) | Terraform + Cloud Run | Cloud Run container | Managed: Memorystore, Cloud SQL |
-
-The `api` image exists even though development happens on the host, because the image is what gets deployed and what CI checks.
-
-### Layers and responsibilities
-
-| Layer | Knows about | Does **not** know about |
-|-------|-------------|-------------------------|
-| **API** (`app/api`) | HTTP: paths, query params, status codes, response models | Upstream URLs, Redis, SQL |
-| **Service** (`app/services`) | Business flow: resolve city → check cache → fetch weather → save history | HTTP request/response objects |
-| **Clients** (`app/clients`) | One external API each, its URL, params and raw JSON → domain model mapping | Caching, DB |
-| **Repository** (`app/db`) | SQL / ORM queries | HTTP, external APIs |
-| **Cache** (`app/cache`) | Key layout, Redis access, expiry on write | Business rules, which data is cached for how long |
-
-Every dependency (HTTP client, Redis, DB session, settings) is created once in the FastAPI **lifespan** and injected with `Depends(...)`, so tests can swap any of them.
+| **Development** | `docker compose up -d` + `poetry run uvicorn app.main:app --reload` + `npm run dev` | On the host | `redis`, `redis-test` (+ `db`, `db-test` in v2.0) |
+| **Unit + API tests** | `poetry run poe test-unit` | In-process (ASGI transport) | None |
+| **Integration tests** | `poetry run poe test-integration` | In-process | `redis-test` (+ `db-test` in v2.0); tests fail if they are not running |
+| **Frontend tests** | `npm run test` (in `frontend/`) | Not needed (API client mocked) | None |
+| **Full stack** | `docker compose --profile full up` | `api` container | `web`, `api`, `redis` (+ `db` in v2.0) |
+| **CI** | GitHub Actions (§13) | In-process for tests; images built and smoke-tested | Service containers |
+| **Production** (optional) | Terraform + Cloud Run | Cloud Run | Managed Redis and Postgres |
 
 ---
 
-## 4. Request flow
+## 5. Backend today (v1.0)
+
+```
+app/
+├── main.py          # create_app(), lifespan: HTTP client, Redis, WeatherService
+├── config.py        # Settings
+├── api/             # routes, query models, error handlers, dependencies
+├── services/        # WeatherService: cache-aside, geocode → weather
+├── clients/         # Open-Meteo / GeoNames clients, shared get_json
+├── cache/           # Cache interface, RedisCache, key layout
+├── schemas/         # Pydantic models: API contract
+└── core/            # domain exceptions, WMO weather codes
+```
+
+| Layer | Knows about | Does **not** know about |
+|-------|-------------|-------------------------|
+| **API** (`app/api`) | HTTP: paths, query params, status codes, headers | Upstream URLs, Redis |
+| **Service** (`app/services`) | The flow: cache → geocode → cache → weather | HTTP requests/responses |
+| **Clients** (`app/clients`) | One external API each: URL, params, JSON → model | Caching, callers |
+| **Cache** (`app/cache`) | Key layout, Redis commands, expiry on write | Which data is cached for how long |
+
+Every dependency (HTTP client, Redis, settings, the service) is created once in the FastAPI **lifespan** and injected with `Depends(...)`, so tests can replace any of them. `WeatherService` depends on interfaces (`GeocodingClient`, `WeatherClient`, `Cache`), not on concrete classes.
+
+This layout is right for one feature. Phase 7 restructures it for v2.0 (§6) without changing behaviour.
+
+---
+
+## 6. Backend structure (v2.0): core + three services
+
+```
+app/
+├── main.py                  # creates the app, includes the routers of core/auth and the 3 services
+├── core/                    # infrastructure only: no features
+│   ├── config.py            # Settings
+│   ├── db.py                # Postgres: async engine, session dependency, Base
+│   ├── cache.py             # Cache interface + RedisCache
+│   ├── http.py              # shared httpx client + get_json
+│   ├── errors.py            # unified error format, exception handlers
+│   ├── events.py            # tiny in-process publish/subscribe
+│   └── auth/                # users, register/login, JWT cookie, current_user dependency
+│
+└── services/
+    ├── weather/             # 1. the weather engine
+    │   ├── router.py        #    /weather/*, /locations/*, /me/places, /me/dashboard
+    │   ├── service.py       #    WeatherService (cache-aside)
+    │   ├── places.py        #    "My places" + dashboard
+    │   ├── providers/       #    Open-Meteo, GeoNames (renamed from clients/)
+    │   ├── repository.py    #    SQL: locations, favourite_places
+    │   ├── models.py        #    SQLAlchemy models
+    │   └── schemas.py       #    Pydantic models
+    │
+    ├── trips/               # 2. the trip builder
+    │   ├── router.py        #    /me/trips/*
+    │   ├── service.py       #    TripService
+    │   ├── repository.py    #    SQL: trips, trip_stops
+    │   ├── models.py
+    │   └── schemas.py
+    │
+    └── stats/               # 3. statistics
+        ├── router.py        #    /stats/popular, /me/stats
+        ├── service.py       #    StatsService + event handler
+        ├── repository.py    #    SQL: search_events (GROUP BY, time windows)
+        ├── models.py
+        └── schemas.py
+```
+
+Every service has the same layers: **router** (HTTP) → **service** (logic, the only thing other services may call) → **repository** (SQL) → **models** (tables).
+
+### What each part owns
+
+| Part | Responsibility | Tables (schema) |
+|------|----------------|-----------------|
+| **core** | Infrastructure every service uses: config, DB session, Redis, HTTP, errors, events | none |
+| **core/auth** | Who is calling: users, passwords, login cookie, preferences | `auth.users` |
+| **weather** | Places and weather: geocoding, stored places, cached weather, saved places, dashboard | `weather.locations`, `weather.favourite_places` |
+| **trips** | Trips made of stops (place + dates) and the weather for each stop | `trips.trips`, `trips.trip_stops` |
+| **stats** | Search events and statistics | `stats.search_events` |
+
+Login is not a service: it is infrastructure that all services need, like the database connection, so it lives in `core`. Saved places belong to `weather`: a saved place is "a location I want weather for", and the dashboard is "current weather for my places".
+
+### Dependency rules
+
+```mermaid
+flowchart TD
+    trips[services/trips] --> weather[services/weather]
+    trips --> core
+    weather --> core
+    stats[services/stats] --> core
+    weather -. "publishes LocationSearched" .-> events((core/events))
+    events -. delivers .-> stats
+    core["core<br/>config · db · cache · http · errors · events · auth"]
+```
+
+1. **Services may use `core`; `core` never imports a service.**
+2. **`trips` may call `weather`** through `WeatherService`. The trip builder cannot work without weather, so a direct dependency is honest.
+3. **`weather` never imports `trips` or `stats`.** It tells the world about searches with an **event**; whoever is interested subscribes.
+4. **`stats` is called by nobody.** It listens to events and answers its own endpoints.
+5. **Services call each other only through the other service's `service.py`**, never its repository or tables.
+
+These rules are import-linter contracts in `pyproject.toml`, checked by the `Architecture` step in CI. A forbidden import fails the pipeline.
+
+### Communication
+
+| From → to | How | Why |
+|-----------|-----|-----|
+| trips → weather | Direct call: `await weather_service.get_forecast(...)` | Trips needs the result to answer the request |
+| weather → stats | Event: `await events.publish(LocationSearched(...))` | Weather must keep working if stats is slow, broken or switched off |
+| any service → auth | Dependency: `user: CurrentUser` in the route | Standard FastAPI security dependency |
+
+The event bus is in-process (a dictionary of handlers). If messaging between processes is ever needed (e.g. weather alerts), `publish` is the single place where **RabbitMQ** would plug in.
+
+---
+
+## 7. Request flows
+
+### Current weather (v1.0)
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor U as User
+    actor U as Browser
     participant R as Router
     participant S as WeatherService
-    participant C as Redis cache
+    participant C as Redis
     participant G as Geocoding API
     participant W as Forecast API
-    participant DB as PostgreSQL
 
     U->>R: GET /api/v1/weather/current?city=Prague
     R->>R: validate query (Pydantic)
-    R->>S: get_current_weather("Prague")
+    R->>S: get_current("Prague")
 
-    S->>C: GET geo:prague
+    S->>C: GET geo:prague:
     alt cache hit
         C-->>S: Location
     else cache miss
         S->>G: GET /v1/search?name=Prague&count=1
-        G-->>S: results[0] (lat, lon, country, tz)
-        S->>C: SET geo:prague (TTL 7 days)
+        G-->>S: results[0]
+        S->>C: SET geo:prague: EX 604800
     end
 
-    S->>C: GET weather:current:50.09:14.42
+    S->>C: GET weather:current:50.09:14.42:metric
     alt cache hit
         C-->>S: CurrentWeather
     else cache miss
         S->>W: GET /v1/forecast?latitude&longitude&current=...
         W-->>S: current block
-        S->>C: SET weather:current:... (TTL 10 min)
+        S->>C: SET weather:current:... EX 600
     end
 
-    S-)DB: INSERT search_history (background task)
-    S-->>R: WeatherResponse
-    R-->>U: 200 OK (JSON)
+    S-->>R: CurrentWeatherResponse (cached: true/false)
+    R-->>U: 200 OK + Cache-Control: public, max-age=600
 ```
 
-Saving history is done with a FastAPI `BackgroundTasks` so the user never waits for the DB write.
+Errors are domain exceptions raised in the providers or the service (`CityNotFoundError`, `UpstreamServiceError`, `UpstreamTimeoutError`) and mapped to HTTP by exception handlers (§10). Redis errors are logged and treated as a cache miss.
+
+### Trip forecast (v2.0)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Browser
+    participant A as core/auth
+    participant T as TripService
+    participant DB as PostgreSQL
+    participant W as WeatherService
+    participant E as core/events
+    participant St as stats
+
+    U->>A: GET /api/v1/me/trips/7/forecast (cookie)
+    A-->>T: current user
+    T->>DB: trip 7 + stops + locations (JOIN), owned by the user?
+    DB-->>T: 3 stops
+    par for each stop, concurrently
+        T->>W: get_forecast(location, dates)
+        W->>W: Redis cache → Open-Meteo on a miss
+        W-)E: publish LocationSearched
+        E-)St: save search_event
+    end
+    T-->>U: each stop with the weather for its own dates
+```
+
+Stops more than 16 days ahead (the Open-Meteo forecast limit) get `"forecast available from <date>"` instead of data.
 
 ---
 
-## 5. API design
+## 8. Data
 
-Base path: `/api/v1` (versioned so the contract can evolve). Interactive docs at `/docs` (Swagger) and `/redoc`.
+### 8.1 Redis cache (v1.0)
+
+| Key | Value | TTL |
+|-----|-------|-----|
+| `geo:{normalized_city}:{country}` | `Location` JSON | 7 days (places don't move) |
+| `weather:current:{lat:.2f}:{lon:.2f}:{units}` | `CurrentWeather` JSON | 10 min (Open-Meteo updates ~15 min) |
+| `weather:forecast:{lat:.2f}:{lon:.2f}:{days}:{units}` | `list[DailyForecastDay]` JSON | 1 hour |
+
+Coordinates are rounded to 2 decimals (~1 km) so nearby requests share an entry. City names are lower-cased and trimmed (`"  Prague "` and `"prague"` share `geo:prague:`).
+
+- **Cache-aside** in `WeatherService`: read the key → on a miss call the provider → store the result with its TTL. Values are Pydantic models serialised to JSON; an entry that no longer matches the model is treated as a miss. Errors such as `CityNotFoundError` are not cached.
+- **Redis is optional at runtime.** Any cache error is logged and treated as a miss. `/health/ready` reports it with `503`.
+- **HTTP caching:** responses carry `Cache-Control: public, max-age=<TTL>`, so browsers and proxies can reuse them too.
+- **Redis is a disposable cache, never a data store.** It evicts keys under memory pressure (`allkeys-lru`) and may be flushed at any time. Anything that must be kept goes to PostgreSQL.
+
+### 8.2 PostgreSQL (v2.0): one database, one schema per service
+
+```
+database "weather_app"
+├── schema auth      ← core/auth
+├── schema weather   ← services/weather
+├── schema trips     ← services/trips
+└── schema stats     ← services/stats
+```
+
+Each service owns its schema and only writes there, the same boundary as in the code. Because it is one database, foreign keys and joins across schemas still work, and there is one Alembic migration history. If a service ever had to move to its own database, its tables are already isolated.
+
+Two separate databases (e.g. users / analytics) were considered and rejected: no foreign keys or joins between them, two migration histories, no transaction across both. That split pays off only at a scale this project does not have.
+
+```mermaid
+erDiagram
+    AUTH_USERS ||--o{ WEATHER_FAVOURITE_PLACES : saves
+    AUTH_USERS ||--o{ TRIPS_TRIPS : plans
+    AUTH_USERS |o--o{ STATS_SEARCH_EVENTS : "optional"
+    TRIPS_TRIPS ||--|{ TRIPS_TRIP_STOPS : has
+    WEATHER_LOCATIONS ||--o{ WEATHER_FAVOURITE_PLACES : ""
+    WEATHER_LOCATIONS ||--o{ TRIPS_TRIP_STOPS : ""
+    WEATHER_LOCATIONS |o--o{ STATS_SEARCH_EVENTS : ""
+
+    AUTH_USERS {
+        uuid id PK
+        text email UK
+        text password_hash
+        jsonb preferences "units, language, home place"
+        timestamptz created_at
+    }
+    WEATHER_LOCATIONS {
+        bigint id PK
+        text provider_id UK "id from the geocoding provider"
+        text name
+        text country_code
+        text region
+        float latitude
+        float longitude
+        text timezone
+    }
+    WEATHER_FAVOURITE_PLACES {
+        uuid user_id PK, FK
+        bigint location_id PK, FK
+        int position
+        text nickname
+    }
+    TRIPS_TRIPS {
+        uuid id PK
+        uuid user_id FK
+        text title
+        timestamptz created_at
+    }
+    TRIPS_TRIP_STOPS {
+        uuid id PK
+        uuid trip_id FK
+        bigint location_id FK
+        int position
+        date start_date
+        date end_date
+    }
+    STATS_SEARCH_EVENTS {
+        bigint id PK
+        text query
+        bigint location_id FK "null if not found"
+        uuid user_id FK "null if anonymous"
+        text endpoint
+        bool found
+        timestamptz created_at
+    }
+```
+
+(Mermaid cannot show schemas, so names are written as `SCHEMA_TABLE`: `AUTH_USERS` is `auth.users`.)
+
+### 8.3 Design decisions
+
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Saved places | Table `weather.favourite_places` with `UNIQUE(user_id, location_id)` and FKs | Fixed shape, points at another table: the database guarantees no duplicates and no dangling ids, and "how many users saved Prague" is a plain `GROUP BY`. A JSONB array on the user would lose all of that |
+| User preferences | `auth.users.preferences JSONB`, validated by a Pydantic model | Small, optional, belongs to the user, nothing references it, and new settings need no migration. The right job for JSONB |
+| Places | Stored once in `weather.locations`, upserted from geocoding results | Stable ids for REST resources (`/locations/{id}`), and trips, saved places and statistics all reference the same row |
+| Trip stops | `CHECK (end_date >= start_date)`, exclusion constraint against overlapping stops, unique position per trip | Invalid trips cannot exist, whatever the application code does |
+| Search events | Written by an event handler, aggregated with SQL | Weather stays independent of statistics; statistics are flexible queries (time windows, per country) over raw events |
+
+---
+
+## 9. Frontend (v1.0, extended in v2.0)
+
+A **separate application in the same repository** (`frontend/`), not part of the Python package and not a backend service. It is a client of the public REST API, just like Swagger or curl.
+
+```
+frontend/
+├── src/
+│   ├── api/
+│   │   ├── schema.d.ts      # GENERATED from the backend's /openapi.json, never edited by hand
+│   │   └── client.ts        # typed openapi-fetch client
+│   ├── pages/               # v1: Search · v2: Login, Dashboard, Trips, Trip, Stats, Preferences
+│   ├── components/          # WeatherCard, ForecastList, PlacePicker, UnitsToggle, ErrorBanner, …
+│   ├── stores/              # v2: Pinia store for the logged-in user and preferences
+│   └── router.ts
+├── tests/                   # Vitest component tests
+├── Dockerfile               # Node build stage → nginx runtime stage
+├── nginx.conf               # serve the app, proxy /api to the api service
+├── vite.config.ts           # dev proxy /api → http://localhost:8000
+└── package.json
+```
+
+**The API is the contract.** The TypeScript types are generated from the OpenAPI schema FastAPI produces. When a Pydantic model changes, the frontend type check shows every place that must follow, and CI fails if the generated types are out of date. The backend and the frontend cannot drift apart unnoticed.
+
+| | Development | Full stack / production |
+|---|---|---|
+| Frontend | `npm run dev` (Vite, port 5173, hot reload) | static files built by `npm run build`, served by nginx in the `web` image (port 8080) |
+| API calls | Vite proxies `/api` → `localhost:8000` | nginx proxies `/api` → `api:8000` |
+| Same origin | yes (proxy) | yes (proxy), so no CORS configuration |
+
+**Login (v2.0):** the JWT is stored in an **httpOnly, Secure, SameSite=Lax cookie**. Page scripts cannot read it (protection against XSS), and because frontend and API share one origin the browser sends it automatically.
+
+---
+
+## 10. API design
+
+Base path `/api/v1`. Interactive docs at `/docs` (Swagger) and `/redoc`.
+
+### v1.0
 
 | Method | Path | Query params | Description |
 |--------|------|-------------|-------------|
-| `GET` | `/api/v1/weather/current` | `city` (str, 1–100 chars, required), `country` (ISO-2, optional), `units` (`metric`\|`imperial`, default `metric`) | Current weather for the city. |
-| `GET` | `/api/v1/weather/forecast` | `city`, `country`, `units`, `days` (1–16, default 7) | Daily forecast. |
-| `GET` | `/api/v1/locations/search` | `q`, `country`, `limit` (1–10, default 5) | Candidate places for an ambiguous name (autocomplete). Returns `{"results": [...]}`, empty list if nothing matches. |
-| `GET` | `/api/v1/history` | `limit` (1–50, default 10) | Most recent searches. |
-| `GET` | `/api/v1/history/popular` | `limit` | Most searched cities (`GROUP BY` + `COUNT`). |
-| `GET` | `/health` | — | Liveness: app is running. |
-| `GET` | `/health/ready` | — | Readiness: Redis (Phase 3) and Postgres (Phase 4) reachable, `503` otherwise. |
+| `GET` | `/api/v1/weather/current` | `city` (1–100 chars, required), `country` (ISO-2), `units` (`metric` \| `imperial`) | Current weather |
+| `GET` | `/api/v1/weather/forecast` | same + `days` (1–16, default 7) | Daily forecast |
+| `GET` | `/api/v1/locations/search` | `q`, `country`, `limit` (1–10, default 5) | Candidate places for an ambiguous name; `{"results": [...]}` |
+| `GET` | `/health` | — | Liveness |
+| `GET` | `/health/ready` | — | Readiness: Redis (and Postgres in v2.0) reachable, `503` otherwise |
 
-### Example response — `GET /api/v1/weather/current?city=Prague`
+### v2.0 additions
+
+| Service | Endpoints |
+|---------|-----------|
+| core/auth | `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /me` · `PATCH /me/preferences` |
+| weather | `GET /locations/{id}` · `GET/POST /me/places` · `PATCH/DELETE /me/places/{location_id}` · `GET /me/dashboard` |
+| trips | `GET/POST /me/trips` · `GET/PATCH/DELETE /me/trips/{id}` · `POST/PATCH/DELETE /me/trips/{id}/stops…` · `GET /me/trips/{id}/forecast` |
+| stats | `GET /stats/popular?since=7d&country=CZ` · `GET /me/stats` |
+
+`/me/...` endpoints require login (`401` otherwise) and only ever return the caller's own data (`404` for someone else's trip, so ids of other users' trips are not revealed).
+
+### Example response: `GET /api/v1/weather/current?city=Prague`
 
 ```json
 {
@@ -218,11 +545,11 @@ Base path: `/api/v1` (versioned so the contract can evolve). Interactive docs at
 }
 ```
 
-`cached` is added in Phase 3 together with Redis: `true` when the weather data came from the cache. Responses also carry a `Cache-Control` header (see §6).
+From v2.0 `location` also contains its stable `id`.
 
 ### Error format
 
-All errors share one shape, produced by custom exception handlers:
+Every error has the same shape:
 
 ```json
 { "error": { "code": "CITY_NOT_FOUND", "message": "No place found for 'Pragu'." } }
@@ -242,208 +569,155 @@ Validation errors also list every invalid field:
 }
 ```
 
-| Situation | Exception (domain) | HTTP status |
-|-----------|-------------------|-------------|
-| Invalid query parameter | FastAPI `RequestValidationError` | `422` |
+| Situation | Exception | HTTP status |
+|-----------|-----------|-------------|
+| Invalid parameter | `RequestValidationError` | `422` |
 | Unknown URL / wrong method | Starlette `HTTPException` | `404` / `405` |
-| Geocoding returned no results | `CityNotFoundError` | `404` |
-| Upstream returned 4xx/5xx / bad JSON | `UpstreamServiceError` (detail logged, generic message returned) | `502` |
+| No place found | `CityNotFoundError` | `404` |
+| Upstream 4xx/5xx or bad JSON | `UpstreamServiceError` (detail logged, generic message returned) | `502` |
 | Upstream timeout | `UpstreamTimeoutError` | `504` |
-| Redis down | logged, request continues **without cache** | `200` |
-
-Domain exceptions live in `app/core/exceptions.py`; clients raise them, the API layer maps them to HTTP. This replaces the current pattern of re-wrapping everything into `RuntimeError`, which hides the real cause.
-
----
-
-## 6. Data model
-
-```mermaid
-erDiagram
-    SEARCH_HISTORY {
-        bigint id PK
-        varchar query "raw text the user typed"
-        varchar city_name "resolved name"
-        varchar country_code
-        float latitude
-        float longitude
-        varchar endpoint "current | forecast"
-        timestamptz created_at
-    }
-```
-
-One table is enough for this scope. Index on `created_at DESC` (recent) and on `(city_name, country_code)` (popular).
-
-### Cache keys
-
-| Key | Value | TTL |
-|-----|-------|-----|
-| `geo:{normalized_city}:{country}` | `Location` JSON | 7 days (cities don't move) |
-| `weather:current:{lat:.2f}:{lon:.2f}:{units}` | `CurrentWeather` JSON | 10 min (Open-Meteo updates ~15 min) |
-| `weather:forecast:{lat:.2f}:{lon:.2f}:{days}:{units}` | `list[DailyForecastDay]` JSON | 1 hour |
-
-Coordinates are rounded to 2 decimals (~1 km) so nearby requests share a cache entry. City names are lower-cased and trimmed (`"  Prague "` and `"prague"` share `geo:prague:`).
-
-### Caching behaviour
-
-- **Cache-aside** in `WeatherService`: read the key → on a miss call the client → store the result with its TTL. Values are Pydantic models serialised to JSON; an entry that no longer matches the model is treated as a miss. Errors such as `CityNotFoundError` are not cached.
-- The service depends on a small `Cache` interface (`app/cache/base.py`); `RedisCache` is the only production implementation.
-- **Redis is optional at runtime.** Any cache error is logged and treated as a miss, so a Redis outage makes responses slower, never failing. `/health/ready` reports it.
-- **HTTP caching:** responses carry `Cache-Control: public, max-age=<TTL>` (600 s for current weather, 3600 s for the forecast), so browsers and proxies can cache them as well.
+| Not logged in (v2.0) | — | `401` |
+| Constraint violated, e.g. overlapping stops (v2.0) | `ConflictError` | `409` |
+| Redis down | logged, request continues without cache | `200` |
 
 ---
 
-## 7. Project structure
+## 11. Project structure
+
+### v1.0 (after Phase 6)
 
 ```
 weather_forecaster/
-├── app/
-│   ├── main.py                  # create_app(), lifespan (httpx client, Redis, DB engine)
-│   ├── config.py                # Settings(BaseSettings)
-│   ├── api/
-│   │   ├── dependencies.py      # get_weather_service, get_session, ...
-│   │   ├── errors.py            # exception handlers → JSON error format
-│   │   ├── queries.py           # Pydantic models for query parameters
-│   │   └── routes/
-│   │       ├── weather.py
-│   │       ├── locations.py
-│   │       ├── history.py
-│   │       └── health.py
-│   ├── schemas/                 # Pydantic models (API contract + domain)
-│   │   ├── location.py
-│   │   ├── weather.py
-│   │   ├── errors.py            # ErrorResponse
-│   │   └── history.py
-│   ├── services/
-│   │   └── weather_service.py   # orchestration: geocode → cache → fetch → history
-│   ├── clients/
-│   │   ├── base.py              # GeocodingClient (ABC), WeatherClient (Protocol)
-│   │   ├── open_meteo_geocoding.py
-│   │   ├── geonames_geocoding.py   # optional, existing geopy logic moved here
-│   │   ├── open_meteo_weather.py   # evolved from modules/connector.py
-│   │   ├── http.py              # shared AsyncClient factory + get_json error mapping
-│   │   └── factory.py           # picks the geocoding provider from settings
-│   ├── cache/
-│   │   ├── base.py              # Cache interface (Protocol), CacheUnavailableError
-│   │   ├── keys.py              # key layout from §6
-│   │   └── redis_cache.py       # RedisCache (redis.asyncio)
-│   ├── db/
-│   │   ├── base.py              # DeclarativeBase
-│   │   ├── models.py            # SearchHistory
-│   │   ├── session.py           # async engine + sessionmaker
-│   │   └── repositories.py      # SearchHistoryRepository
-│   ├── core/
-│   │   ├── exceptions.py
-│   │   ├── logging.py
-│   │   └── weather_codes.py     # WMO code → "Overcast", "Light rain", ...
-│   └── web/
-│       └── templates/index.html # minimal "enter a city" page
-├── migrations/                  # Alembic
+├── app/                          # backend (layout in §5)
 ├── tests/
-│   ├── conftest.py              # app/client fixtures, respx
-│   ├── fixtures/                # recorded Open-Meteo JSON samples
-│   ├── unit/                    # clients, service (in-memory cache double), weather_codes
-│   ├── api/                     # endpoint tests via httpx.AsyncClient + ASGITransport
-│   └── integration/             # @pytest.mark.integration: real Redis (and Postgres in Phase 4); fails if Docker containers are down
+│   ├── fixtures/                 # recorded Open-Meteo responses
+│   ├── unit/                     # providers, service, cache keys
+│   ├── api/                      # endpoints via ASGITransport
+│   └── integration/              # real Redis (redis-test); fail if Docker is down
+├── frontend/                     # Vue app (layout in §9)
 ├── .github/workflows/ci.yml
-├── Dockerfile
-├── docker-compose.yml           # redis, redis-test, db, db-test; api under the `full` profile
-├── pyproject.toml               # Poetry + ruff + mypy + pytest config
+├── Dockerfile                    # api image
+├── .dockerignore
+├── docker-compose.yml            # redis, redis-test; profile full: api, web
+├── pyproject.toml                # Poetry, ruff, mypy, pytest, poe tasks
 ├── .env.example
 ├── .pre-commit-config.yaml
-├── ARCHITECTURE.md
-└── README.md
+├── ARCHITECTURE.md · ROADMAP.md · README.md · CHANGELOG.md
+```
+
+### v2.0 additions
+
+```
+├── app/                          # core + services (layout in §6)
+├── migrations/                   # Alembic, one history for all schemas
+├── tests/
+│   ├── core/                     # auth, events, db helpers
+│   └── services/{weather,trips,stats}/   # unit, api and integration tests per service
+└── docker-compose.yml            # + db, db-test
 ```
 
 ---
 
-## 8. Configuration
+## 12. Configuration
 
-All settings come from env vars (`.env` locally, secrets manager in the cloud):
+All settings come from environment variables (`.env` locally, secrets manager in the cloud).
 
-| Variable | Example | Purpose |
-|----------|---------|---------|
-| `APP_ENV` | `dev` | `dev` / `test` / `prod` |
-| `DATABASE_URL` | `postgresql+asyncpg://weather:weather@localhost:5432/weather` | Postgres |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis (`redis://redis:6379/0` inside compose) |
-| `GEOCODING_PROVIDER` | `open_meteo` | `open_meteo` or `geonames` |
-| `GEONAMES_USERNAME` | `my_user` | Only if provider is `geonames` |
-| `HTTP_TIMEOUT_SECONDS` | `5` | Upstream timeout |
-| `CACHE_TTL_GEOCODING_SECONDS` | `604800` | Geocoding TTL (7 days) |
-| `CACHE_TTL_CURRENT_SECONDS` | `600` | Current weather TTL |
-| `CACHE_TTL_FORECAST_SECONDS` | `3600` | Forecast TTL |
-| `TEST_REDIS_URL` | `redis://localhost:6380/0` | Tests only: the `redis-test` instance |
-| `LOG_LEVEL` | `INFO` | Logging |
+| Variable | Example | Purpose | Release |
+|----------|---------|---------|---------|
+| `APP_ENV` | `dev` | `dev` / `test` / `prod` | v1.0 |
+| `GEOCODING_PROVIDER` | `open_meteo` | `open_meteo` or `geonames` | v1.0 |
+| `GEONAMES_USERNAME` | `my_user` | only for `geonames` | v1.0 |
+| `HTTP_TIMEOUT_SECONDS` | `5` | upstream timeout | v1.0 |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis (`redis://redis:6379/0` inside compose) | v1.0 |
+| `REDIS_TIMEOUT_SECONDS` | `0.5` | give up on a slow Redis quickly | v1.0 |
+| `CACHE_TTL_GEOCODING_SECONDS` / `_CURRENT_` / `_FORECAST_` | `604800` / `600` / `3600` | cache lifetimes | v1.0 |
+| `LOG_LEVEL` | `INFO` | logging | v1.0 (Phase 6) |
+| `TEST_REDIS_URL` | `redis://localhost:6380/0` | tests only | v1.0 |
+| `DATABASE_URL` | `postgresql+asyncpg://weather:weather@localhost:5432/weather_app` | Postgres | v2.0 |
+| `TEST_DATABASE_URL` | `…@localhost:5433/weather_app_test` | tests only | v2.0 |
+| `JWT_SECRET` | (secret) | signs login tokens; never committed | v2.0 |
+| `JWT_TTL_MINUTES` | `60` | login lifetime | v2.0 |
+| `COOKIE_SECURE` | `true` | `false` only for local HTTP | v2.0 |
 
 ---
 
-## 9. Testing strategy
+## 13. Testing and CI
 
 | Level | What | Tools | Infrastructure |
 |-------|------|-------|----------------|
-| Unit: clients | Correct params sent, JSON → model mapping, 404/5xx/timeout → domain exceptions | `respx`, JSON fixtures | None |
-| Unit: service | Cache hit skips HTTP, miss stores the result, cache errors are ignored | Fake clients + in-memory `Cache` double | None |
-| API | Status codes, response schema, error format, validation, `Cache-Control` headers | `httpx.AsyncClient(transport=ASGITransport(app))`, `app.dependency_overrides` | None |
-| Integration: Redis | `RedisCache` get/set, JSON round-trip, TTL expiry, Redis down | `@pytest.mark.integration` | `redis-test` / CI service container |
-| Integration: Postgres (Phase 4) | Repository insert / recent / popular, migrations | `@pytest.mark.integration` | `db-test` / CI service container |
+| Unit | providers (params, JSON mapping, errors), service logic, cache keys | `respx`, JSON fixtures, test doubles of our own interfaces | none |
+| API | status codes, schemas, error format, validation, headers, auth rules (v2.0) | `httpx.AsyncClient` + `ASGITransport`, `dependency_overrides` | none |
+| Integration: Redis | `RedisCache`, TTL expiry, full request path through Redis | `@pytest.mark.integration` | `redis-test` / CI service container |
+| Integration: Postgres (v2.0) | repositories, constraints, migrations, statistics queries | `@pytest.mark.integration` | `db-test` / CI service container |
+| Frontend | components, pages, API error handling | Vitest + Vue Test Utils, mocked API client | none |
+| End-to-end (optional) | browser through the `full` profile | Playwright | full stack |
 
-**No fakes of third-party infrastructure.** Redis and Postgres behaviour is tested against the real thing; test doubles are used only for *our own* interfaces (`Cache`, `WeatherClient`, ...). External HTTP APIs are always mocked; no test calls Open-Meteo or GeoNames.
+**Rules:**
+- **No fakes of third-party infrastructure.** Redis and Postgres are tested for real; test doubles exist only for *our own* interfaces.
+- **No test calls an external API.** Open-Meteo and GeoNames are always mocked.
+- **Integration tests fail when their container is not running**, with a hint how to start it. A green run always means the real infrastructure was used.
+- **Coverage gate:** ≥ 80 % over the whole backend suite.
 
-Integration tests **fail** when their container is not reachable, locally and in CI, with a hint how to start it (`docker compose up -d redis-test`). They are never skipped, so a green run always means the code was tested against the real infrastructure. `poe test-unit` runs everything that needs no Docker.
+### CI jobs
 
-Coverage gate: ≥ 80 % over the whole suite (`pytest --cov`).
+All jobs run on every pull request and are required checks in the `main` ruleset.
 
-### CI pipeline
+| Job | Steps | From |
+|-----|-------|------|
+| `Lint, type-check, test` | ruff, format check, mypy strict, unit + API tests · `Architecture` step (import-linter) from Phase 7 | Phase 0 |
+| `Redis integration` | `redis:7.4-alpine` service container, integration tests | Phase 3 |
+| `Docker image` | build the `api` (and `web`) images, start the `full` profile, smoke-test `/health/ready`, a weather request and the web page | Phase 4 |
+| `Frontend` | `npm ci`, lint, `vue-tsc`, Vitest, build, generated API types up to date | Phase 5 |
+| `Postgres integration` | `postgres:16-alpine` service container, `alembic upgrade head`, `alembic check`, Postgres integration tests | Phase 8 |
+| `Coverage` | merges coverage from the test jobs, applies the 80 % gate (until Phase 8 the gate runs in `Redis integration`) | Phase 8 |
+| Release (on tag `v*`) | push the `api` and `web` images to GitHub Container Registry | Phase 6 |
 
 ```mermaid
 flowchart LR
-    push([push / pull request])
-
-    subgraph checks[Job: checks]
-        lint[ruff lint] --> fmt[format check] --> mypy[mypy strict] --> unit[unit + API tests]
-    end
-
-    subgraph integration["Job: Redis integration"]
-        svc[("redis:7.4-alpine<br/>service container")]
-        itests["all tests incl. integration<br/>+ coverage gate"]
-        itests --> svc
-    end
-
-    gate{both green?}
-    push --> lint
-    push --> itests
-    unit --> gate
-    itests --> gate
-    gate -- yes --> merge([PR can be merged])
+    pr([pull request])
+    pr --> checks["Lint, type-check, test"]
+    pr --> redisj["Redis integration"]
+    pr --> docker["Docker image"]
+    pr --> fe["Frontend"]
+    pr --> pg["Postgres integration (v2.0)"]
+    redisj --> cov["Coverage (v2.0)"]
+    pg --> cov
+    checks --> gate{all green?}
+    docker --> gate
+    fe --> gate
+    cov --> gate
+    redisj --> gate
+    gate -- yes --> merge([merge allowed])
 ```
 
-Both jobs are required status checks in the `main` ruleset. The `checks` job needs no Docker and gives fast feedback; the `Redis integration` job starts its containers as [GitHub Actions service containers](https://docs.github.com/en/actions/use-cases-and-examples/using-containerized-services/about-service-containers) (official images, nothing is built).
+Service containers are official images started by GitHub next to the job; only the app's own images are built.
 
 ---
 
-## 10. Deployment
+## 14. Deployment
 
 ```mermaid
 flowchart LR
-    dev[git push] --> gha[GitHub Actions<br/>checks · Redis integration]
-    gha -- on main --> img[Build Docker image]
-    img --> reg[(Artifact Registry)]
-    reg --> run[Cloud Run<br/>FastAPI container]
-    run --> mem[(Memorystore<br/>Redis)]
-    run --> sql[(Cloud SQL<br/>PostgreSQL)]
+    tag([git tag v1.0.0]) --> gha[GitHub Actions]
+    gha --> ghcr[(GitHub Container Registry<br/>api + web images)]
+    ghcr --> compose["any Docker host<br/>docker compose --profile full up"]
+    ghcr -. optional .-> run["Cloud Run<br/>api + web"]
+    run -.-> mem[(Memorystore Redis)]
+    run -.-> sql[(Cloud SQL Postgres, v2.0)]
     tf[Terraform] -. provisions .-> run & mem & sql
 ```
 
-**Local development:** `docker compose up` starts only the infrastructure: `redis:7.4-alpine` and `postgres:16` for dev, plus `redis-test` and a tmpfs-backed `db-test` for integration tests. The app runs on the host with `poetry run uvicorn app.main:app --reload` for fast reloads and debugging.
-
-**Full stack / CI:** the app's Docker image is added to compose under the `full` profile (`docker compose --profile full up`). CI builds this image and smoke-tests it, because the image is the artefact that gets deployed. Cloud deployment is an optional final step.
+- **Release 1.0** is a set of two images (`api`, `web`) plus the official Redis image. `docker compose --profile full up` runs the whole app anywhere Docker runs.
+- **Release 2.0** adds Postgres; migrations run when the `api` container starts.
+- **Cloud deployment** (Cloud Run, managed Redis and Postgres, Terraform) is an optional extension.
 
 ---
 
-## 11. Possible extensions
+## 15. Possible extensions
 
-- **Vue.js + TypeScript frontend** with city autocomplete using `/locations/search`.
-- **Rate limiting** per IP (`slowapi` or Redis token bucket).
-- **Favourite cities** per user with JWT auth (`fastapi-users` or hand-rolled with `python-jose`).
-- **Weather alerts**: a scheduled worker publishes "temperature drop" events to **RabbitMQ**; a consumer sends notifications. This is the natural place for messaging, not the main request path.
-- **gRPC interface** alongside REST (Protobuf contract for `GetCurrentWeather`) to show both API styles.
-- **Observability**: Prometheus metrics (`prometheus-fastapi-instrumentator`), OpenTelemetry tracing.
+- **Weather alerts**: users define rules ("below 0 °C in Prague"); a scheduled worker checks them and publishes events through **RabbitMQ** instead of the in-process bus.
+- **Climate comparison**: import history from the Open-Meteo Historical API and show "today is 6 °C warmer than the 10-year average".
+- **Rate limiting** per user / IP with a Redis token bucket.
+- **gRPC interface** alongside REST to show both API styles.
+- **Observability**: Prometheus metrics, OpenTelemetry tracing.
+- **End-to-end tests** with Playwright against the `full` profile.
