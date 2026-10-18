@@ -156,3 +156,45 @@ async def test_validation_reports_all_invalid_fields(client: AsyncClient) -> Non
 
     fields = {d["field"] for d in response.json()["error"]["details"]}
     assert fields == {"country", "units", "days"}
+
+
+async def test_second_request_is_served_from_cache(
+    client: AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    geocoding = mock_geocoding(respx_mock)
+    forecast = mock_forecast(respx_mock, "forecast_current")
+
+    first = await client.get(CURRENT, params={"city": "Prague"})
+    second = await client.get(CURRENT, params={"city": "prague"})
+
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is True
+    assert second.json()["current"] == first.json()["current"]
+    assert geocoding.call_count == 1
+    assert forecast.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "fixture", "max_age"),
+    [(CURRENT, "forecast_current", 600), (FORECAST, "forecast_daily", 3600)],
+)
+async def test_success_responses_carry_cache_control(
+    client: AsyncClient, respx_mock: respx.MockRouter, path: str, fixture: str, max_age: int
+) -> None:
+    mock_geocoding(respx_mock)
+    mock_forecast(respx_mock, fixture)
+
+    response = await client.get(path, params={"city": "Prague", "days": 3})
+
+    assert response.headers["cache-control"] == f"public, max-age={max_age}"
+
+
+async def test_error_responses_have_no_cache_control(
+    client: AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    mock_geocoding(respx_mock, "geocoding_not_found")
+
+    response = await client.get(CURRENT, params={"city": "Qwertyuiopxyz"})
+
+    assert response.status_code == 404
+    assert "cache-control" not in response.headers

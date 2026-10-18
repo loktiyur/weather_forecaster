@@ -20,6 +20,14 @@ class Settings(BaseSettings):
 
     http_timeout_seconds: float = 5.0
 
+    redis_url: str = "redis://localhost:6379/0"
+    # Short timeouts: if Redis hangs, requests fall back to the APIs instead of waiting.
+    redis_timeout_seconds: float = 0.5
+
+    cache_ttl_geocoding_seconds: int = 7 * 24 * 3600
+    cache_ttl_current_seconds: int = 600
+    cache_ttl_forecast_seconds: int = 3600
+
     @model_validator(mode="after")
     def _geonames_needs_username(self) -> Self:
         if self.geocoding_provider == "geonames" and not self.geonames_username:

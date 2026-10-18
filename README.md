@@ -9,6 +9,7 @@ Async REST API that shows the current weather and a daily forecast for a city en
 
 - Python 3.12
 - [Poetry](https://python-poetry.org/) 2.x (`brew install poetry` on macOS)
+- Docker with Docker Compose (for Redis)
 
 ## Setup
 
@@ -17,6 +18,23 @@ poetry install                    # create the virtualenv and install all depend
 cp .env.example .env              # local settings (never committed)
 poetry run pre-commit install     # run the checks automatically on every git commit
 ```
+
+## Infrastructure (Docker)
+
+Docker Compose runs only the infrastructure; the app runs on your machine.
+
+```bash
+docker compose up -d       # start Redis (dev, port 6379) and redis-test (port 6380)
+docker compose ps          # both should be "healthy"
+docker compose down        # stop them (the dev cache survives in a volume)
+```
+
+| Service | Port | Used by |
+|---------|------|---------|
+| `redis` | 6379 | the app (`REDIS_URL`), keeps its data across restarts |
+| `redis-test` | 6380 | integration tests only, emptied by every test, nothing saved to disk |
+
+Without Redis the app still works: every request calls the weather APIs, a warning is logged and `/health/ready` returns `503`.
 
 ## Run the app
 
@@ -31,6 +49,7 @@ poetry run uvicorn app.main:app --reload
 | http://localhost:8000/docs | Swagger UI: interactive API docs, try every endpoint from the browser |
 | http://localhost:8000/redoc | ReDoc: alternative read-only API docs |
 | http://localhost:8000/health | `{"status":"ok"}`: the app is running |
+| http://localhost:8000/health/ready | `200` if Redis is reachable, `503` if not |
 
 There is no page at `/` yet (it returns a `NOT_FOUND` error). The city search page arrives in Phase 6.
 
@@ -41,7 +60,7 @@ There is no page at `/` yet (it returns a `NOT_FOUND` error). The city search pa
 | `GET /api/v1/weather/current` | `city` (required), `country` (ISO code, e.g. `CZ`), `units` (`metric` / `imperial`) |
 | `GET /api/v1/weather/forecast` | same as above + `days` (1-16, default 7) |
 | `GET /api/v1/locations/search` | `q` (required), `country`, `limit` (1-10, default 5) |
-| `GET /health` | |
+| `GET /health`, `GET /health/ready` | |
 
 ```bash
 curl "http://localhost:8000/api/v1/weather/current?city=Prague"
@@ -49,6 +68,35 @@ curl "http://localhost:8000/api/v1/weather/current?city=Paris&country=US&units=i
 curl "http://localhost:8000/api/v1/weather/forecast?city=Kyiv&days=3"
 curl "http://localhost:8000/api/v1/locations/search?q=Springfield&limit=3"
 ```
+
+### Caching
+
+Results are cached in Redis: places for 7 days, current weather for 10 minutes, forecasts for 1 hour.
+`"cached": true` in the response means the weather came from the cache, and the `Cache-Control` header
+lets browsers reuse the response too:
+
+```bash
+curl -i "http://localhost:8000/api/v1/weather/current?city=Prague"
+# HTTP/1.1 200 OK
+# cache-control: public, max-age=600
+# ... "cached":false}            ← first call: fetched from Open-Meteo
+# (call again)       "cached":true}   ← served from Redis
+```
+
+Look into the cache:
+
+```bash
+docker compose exec redis redis-cli --scan          # list keys (copy exact names from here)
+docker compose exec redis redis-cli ttl geo:prague: # seconds left (note the trailing colon)
+docker compose exec redis redis-cli monitor         # watch every command live, Ctrl+C to stop
+docker compose exec redis redis-cli flushdb         # empty the dev cache
+```
+
+`ttl` returns the seconds left, `-2` if the key does not exist (wrong name, or already expired:
+current weather lives only 10 minutes) and `-1` if it has no expiry (never the case here).
+Place keys end with the country code, empty when none was given: `geo:prague:` vs `geo:prague:CZ`.
+
+### Errors
 
 Every error uses the same format:
 
@@ -76,19 +124,45 @@ CI runs exactly the same tasks.
 
 ```bash
 poetry run poe format-code     # fix lint issues + format everything (run this when the format check fails)
-poetry run poe check           # everything CI runs: lint, format check, type check, tests with coverage
+poetry run poe check           # lint, format check, type check, all tests with coverage (needs redis-test, see below)
 ```
 
 Individual tasks:
 
 ```bash
-poetry run poe lint            # ruff check
-poetry run poe format-check    # ruff format --check (changes nothing)
-poetry run poe typecheck       # mypy, strict
-poetry run poe test            # pytest; extra args pass through: poe test -k geocode -v
-poetry run poe test-cov        # pytest with coverage, fails below 80 %
-poetry run poe --help          # list all tasks
+poetry run poe lint              # ruff check
+poetry run poe format-check      # ruff format --check (changes nothing)
+poetry run poe typecheck         # mypy, strict
+poetry run poe test-unit         # unit + API tests, no Docker needed
+poetry run poe test-integration  # tests against the real redis-test container
+poetry run poe test              # all tests; extra args pass through: poe test -k geocode -v
+poetry run poe test-cov          # all tests with coverage, fails below 80 %
+poetry run poe --help            # list all tasks
 ```
+
+### Unit vs. integration tests
+
+- **Unit + API tests** never need infrastructure: external APIs are mocked with respx and the cache
+  is a small in-memory test double of our own `Cache` interface.
+- **Integration tests** (`@pytest.mark.integration`, in `tests/integration/`) run against a real Redis
+  in Docker. **The `redis-test` container must be running, otherwise these tests fail**
+  (with a message telling you how to start it):
+  ```bash
+  docker compose up -d redis-test     # Docker Desktop / Rancher Desktop must be running
+  docker compose ps                   # redis-test should be "healthy"
+  poetry run poe test-integration
+  ```
+  `poe test`, `poe test-cov` and `poe check` run all tests, so they need `redis-test` running too.
+  Without Docker, use `poe test-unit`.
+
+### CI
+
+Two jobs run on every pull request; both are required checks for merging into `main`:
+
+| Job | Steps |
+|-----|-------|
+| `Lint, type-check, test` | lint, format check, mypy, unit + API tests |
+| `Redis integration` | starts `redis:7.4-alpine` as a service container, runs the integration tests, then all tests with the coverage gate |
 
 Tip: after `eval $(poetry env activate)` the `poetry run` prefix can be dropped (`poe check`).
 

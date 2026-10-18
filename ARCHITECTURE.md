@@ -52,9 +52,9 @@ The stack follows the skills listed in my CV (Python, asyncio, REST APIs, Postgr
 | Retries | **tenacity** | Retry transient upstream failures with exponential backoff. |
 | Logging | **structlog** (or stdlib `logging` with JSON formatter) | Structured logs with request id. |
 | Dependency mgmt | **Poetry** | Lock file, dev dependency groups. |
-| Testing | **pytest**, **pytest-asyncio**, **respx** (mock httpx), **fakeredis**, `httpx.ASGITransport` | Unit + API tests without hitting real services. |
+| Testing | **pytest**, **pytest-asyncio**, **respx** (mock httpx), `httpx.ASGITransport`, real **Redis/Postgres in Docker** for integration tests | Unit + API tests never call external APIs; tests marked `integration` run against real infrastructure instead of fakes. |
 | Code quality | **ruff** (lint + format), **mypy**, **pre-commit** | Consistent, type-checked code. |
-| Containers | **Docker** (multi-stage) + **docker compose** | Postgres, Redis and a test Postgres for local development; the app's own image for CI and deployment (`full` profile). |
+| Containers | **Docker** (multi-stage) + **docker compose** | Redis and Postgres plus separate test instances (`redis-test`, `db-test`) for local development; the app's own image for CI and deployment (`full` profile). |
 | CI | **GitHub Actions** | Lint → type-check → tests on every push/PR. |
 | Frontend (minimal) | **Jinja2 template** served by FastAPI (or a small Vue.js page) | A single form "enter city → show weather". |
 | Deploy (optional) | **GCP Cloud Run** + Memorystore + Cloud SQL, provisioned with **Terraform** | Matches CV experience; not required for the core project. |
@@ -77,13 +77,14 @@ flowchart LR
             service[Service layer<br/>WeatherService]
             clients[Client layer<br/>GeocodingClient<br/>WeatherClient]
             repo[Repository layer<br/>SearchHistoryRepository]
-            cache[CacheService]
+            cache[Cache layer<br/>Cache → RedisCache]
         end
         tests[pytest]
     end
 
     subgraph compose[docker compose]
-        redis[("Redis<br/>port 6379")]
+        redis[("Redis<br/>port 6379, volume")]
+        redistest[("Redis redis-test<br/>port 6380, no persistence")]
         pg[("PostgreSQL db<br/>port 5432, volume")]
         pgtest[("PostgreSQL db-test<br/>port 5433, tmpfs")]
     end
@@ -100,6 +101,7 @@ flowchart LR
     clients -- httpx async --> meteo
     service --> repo
     repo -- SQLAlchemy async --> pg
+    tests -. integration tests .-> redistest
     tests -. integration tests .-> pgtest
 ```
 
@@ -107,10 +109,11 @@ flowchart LR
 
 | Setup | Command | FastAPI runs | Containers |
 |-------|---------|--------------|------------|
-| **Local development** | `docker compose up -d` + `poetry run uvicorn app.main:app --reload` | On the host | `redis`, `db`, `db-test` |
-| **Tests** | `poetry run pytest` | In-process (ASGI transport) | `db-test` (from Phase 4). External APIs are mocked, Redis is faked |
+| **Local development** | `docker compose up -d` + `poetry run uvicorn app.main:app --reload` | On the host | `redis`, `redis-test`, `db`, `db-test` |
+| **Unit + API tests** | `poetry run poe test-unit` | In-process (ASGI transport) | None. External APIs are mocked with respx, the cache is an in-memory test double |
+| **Integration tests** | `poetry run poe test-integration` | In-process | `redis-test` (Phase 3), `db-test` (Phase 4) |
 | **Full stack** | `docker compose --profile full up` | In the `api` container | `api`, `redis`, `db` |
-| **CI** | GitHub Actions | In-process for tests; the image is built and smoke-tested | GitHub service containers (Postgres) |
+| **CI** | GitHub Actions, jobs `checks` + `Redis integration` (see §9) | In-process for tests; the image is built and smoke-tested (Phase 5) | `Redis integration` job only: GitHub service containers (Redis, later Postgres) |
 | **Production** (optional) | Terraform + Cloud Run | Cloud Run container | Managed: Memorystore, Cloud SQL |
 
 The `api` image exists even though development happens on the host, because the image is what gets deployed and what CI checks.
@@ -123,7 +126,7 @@ The `api` image exists even though development happens on the host, because the 
 | **Service** (`app/services`) | Business flow: resolve city → check cache → fetch weather → save history | HTTP request/response objects |
 | **Clients** (`app/clients`) | One external API each, its URL, params and raw JSON → domain model mapping | Caching, DB |
 | **Repository** (`app/db`) | SQL / ORM queries | HTTP, external APIs |
-| **Cache** (`app/cache`) | Redis keys, TTLs, (de)serialisation | Business rules |
+| **Cache** (`app/cache`) | Key layout, Redis access, expiry on write | Business rules, which data is cached for how long |
 
 Every dependency (HTTP client, Redis, DB session, settings) is created once in the FastAPI **lifespan** and injected with `Depends(...)`, so tests can swap any of them.
 
@@ -185,7 +188,7 @@ Base path: `/api/v1` (versioned so the contract can evolve). Interactive docs at
 | `GET` | `/api/v1/history` | `limit` (1–50, default 10) | Most recent searches. |
 | `GET` | `/api/v1/history/popular` | `limit` | Most searched cities (`GROUP BY` + `COUNT`). |
 | `GET` | `/health` | — | Liveness: app is running. |
-| `GET` | `/health/ready` | — | Readiness: Redis and Postgres reachable. |
+| `GET` | `/health/ready` | — | Readiness: Redis (Phase 3) and Postgres (Phase 4) reachable, `503` otherwise. |
 
 ### Example response — `GET /api/v1/weather/current?city=Prague`
 
@@ -215,7 +218,7 @@ Base path: `/api/v1` (versioned so the contract can evolve). Interactive docs at
 }
 ```
 
-`cached` is added in Phase 3 together with Redis.
+`cached` is added in Phase 3 together with Redis: `true` when the weather data came from the cache. Responses also carry a `Cache-Control` header (see §6).
 
 ### Error format
 
@@ -276,9 +279,16 @@ One table is enough for this scope. Index on `created_at DESC` (recent) and on `
 |-----|-------|-----|
 | `geo:{normalized_city}:{country}` | `Location` JSON | 7 days (cities don't move) |
 | `weather:current:{lat:.2f}:{lon:.2f}:{units}` | `CurrentWeather` JSON | 10 min (Open-Meteo updates ~15 min) |
-| `weather:forecast:{lat:.2f}:{lon:.2f}:{days}:{units}` | `DailyForecast` JSON | 1 hour |
+| `weather:forecast:{lat:.2f}:{lon:.2f}:{days}:{units}` | `list[DailyForecastDay]` JSON | 1 hour |
 
-Coordinates are rounded to 2 decimals (~1 km) so nearby requests share a cache entry.
+Coordinates are rounded to 2 decimals (~1 km) so nearby requests share a cache entry. City names are lower-cased and trimmed (`"  Prague "` and `"prague"` share `geo:prague:`).
+
+### Caching behaviour
+
+- **Cache-aside** in `WeatherService`: read the key → on a miss call the client → store the result with its TTL. Values are Pydantic models serialised to JSON; an entry that no longer matches the model is treated as a miss. Errors such as `CityNotFoundError` are not cached.
+- The service depends on a small `Cache` interface (`app/cache/base.py`); `RedisCache` is the only production implementation.
+- **Redis is optional at runtime.** Any cache error is logged and treated as a miss, so a Redis outage makes responses slower, never failing. `/health/ready` reports it.
+- **HTTP caching:** responses carry `Cache-Control: public, max-age=<TTL>` (600 s for current weather, 3600 s for the forecast), so browsers and proxies can cache them as well.
 
 ---
 
@@ -313,7 +323,9 @@ weather_forecaster/
 │   │   ├── http.py              # shared AsyncClient factory + get_json error mapping
 │   │   └── factory.py           # picks the geocoding provider from settings
 │   ├── cache/
-│   │   └── redis_cache.py
+│   │   ├── base.py              # Cache interface (Protocol), CacheUnavailableError
+│   │   ├── keys.py              # key layout from §6
+│   │   └── redis_cache.py       # RedisCache (redis.asyncio)
 │   ├── db/
 │   │   ├── base.py              # DeclarativeBase
 │   │   ├── models.py            # SearchHistory
@@ -327,13 +339,14 @@ weather_forecaster/
 │       └── templates/index.html # minimal "enter a city" page
 ├── migrations/                  # Alembic
 ├── tests/
-│   ├── conftest.py              # app fixture, fake Redis, test DB, respx router
+│   ├── conftest.py              # app/client fixtures, respx
 │   ├── fixtures/                # recorded Open-Meteo JSON samples
-│   ├── unit/                    # clients, service, cache, weather_codes
-│   └── api/                     # endpoint tests via httpx.AsyncClient + ASGITransport
+│   ├── unit/                    # clients, service (in-memory cache double), weather_codes
+│   ├── api/                     # endpoint tests via httpx.AsyncClient + ASGITransport
+│   └── integration/             # @pytest.mark.integration: real Redis (and Postgres in Phase 4); fails if Docker containers are down
 ├── .github/workflows/ci.yml
 ├── Dockerfile
-├── docker-compose.yml           # redis, db, db-test; api under the `full` profile
+├── docker-compose.yml           # redis, redis-test, db, db-test; api under the `full` profile
 ├── pyproject.toml               # Poetry + ruff + mypy + pytest config
 ├── .env.example
 ├── .pre-commit-config.yaml
@@ -350,26 +363,60 @@ All settings come from env vars (`.env` locally, secrets manager in the cloud):
 | Variable | Example | Purpose |
 |----------|---------|---------|
 | `APP_ENV` | `dev` | `dev` / `test` / `prod` |
-| `DATABASE_URL` | `postgresql+asyncpg://weather:weather@db:5432/weather` | Postgres |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis |
+| `DATABASE_URL` | `postgresql+asyncpg://weather:weather@localhost:5432/weather` | Postgres |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis (`redis://redis:6379/0` inside compose) |
 | `GEOCODING_PROVIDER` | `open_meteo` | `open_meteo` or `geonames` |
 | `GEONAMES_USERNAME` | `my_user` | Only if provider is `geonames` |
 | `HTTP_TIMEOUT_SECONDS` | `5` | Upstream timeout |
+| `CACHE_TTL_GEOCODING_SECONDS` | `604800` | Geocoding TTL (7 days) |
 | `CACHE_TTL_CURRENT_SECONDS` | `600` | Current weather TTL |
+| `CACHE_TTL_FORECAST_SECONDS` | `3600` | Forecast TTL |
+| `TEST_REDIS_URL` | `redis://localhost:6380/0` | Tests only: the `redis-test` instance |
 | `LOG_LEVEL` | `INFO` | Logging |
 
 ---
 
 ## 9. Testing strategy
 
-| Level | What | Tools |
-|-------|------|-------|
-| Unit — clients | Correct params sent, JSON → model mapping, 404/5xx/timeout → domain exceptions | `respx`, JSON fixtures |
-| Unit — service | Cache hit skips HTTP; cache miss stores result; Redis failure degrades gracefully | `fakeredis`, mocked clients |
-| API | Status codes, response schema, error format, validation (`city=""` → 422) | `httpx.AsyncClient(transport=ASGITransport(app))`, `app.dependency_overrides` |
-| DB | Repository insert / recent / popular | Postgres in CI service container (or `testcontainers`) |
+| Level | What | Tools | Infrastructure |
+|-------|------|-------|----------------|
+| Unit: clients | Correct params sent, JSON → model mapping, 404/5xx/timeout → domain exceptions | `respx`, JSON fixtures | None |
+| Unit: service | Cache hit skips HTTP, miss stores the result, cache errors are ignored | Fake clients + in-memory `Cache` double | None |
+| API | Status codes, response schema, error format, validation, `Cache-Control` headers | `httpx.AsyncClient(transport=ASGITransport(app))`, `app.dependency_overrides` | None |
+| Integration: Redis | `RedisCache` get/set, JSON round-trip, TTL expiry, Redis down | `@pytest.mark.integration` | `redis-test` / CI service container |
+| Integration: Postgres (Phase 4) | Repository insert / recent / popular, migrations | `@pytest.mark.integration` | `db-test` / CI service container |
 
-Target: ≥ 85 % coverage (`pytest-cov`), no real network calls in the test suite.
+**No fakes of third-party infrastructure.** Redis and Postgres behaviour is tested against the real thing; test doubles are used only for *our own* interfaces (`Cache`, `WeatherClient`, ...). External HTTP APIs are always mocked; no test calls Open-Meteo or GeoNames.
+
+Integration tests **fail** when their container is not reachable, locally and in CI, with a hint how to start it (`docker compose up -d redis-test`). They are never skipped, so a green run always means the code was tested against the real infrastructure. `poe test-unit` runs everything that needs no Docker.
+
+Coverage gate: ≥ 80 % over the whole suite (`pytest --cov`).
+
+### CI pipeline
+
+```mermaid
+flowchart LR
+    push([push / pull request])
+
+    subgraph checks[Job: checks]
+        lint[ruff lint] --> fmt[format check] --> mypy[mypy strict] --> unit[unit + API tests]
+    end
+
+    subgraph integration["Job: Redis integration"]
+        svc[("redis:7.4-alpine<br/>service container")]
+        itests["all tests incl. integration<br/>+ coverage gate"]
+        itests --> svc
+    end
+
+    gate{both green?}
+    push --> lint
+    push --> itests
+    unit --> gate
+    itests --> gate
+    gate -- yes --> merge([PR can be merged])
+```
+
+Both jobs are required status checks in the `main` ruleset. The `checks` job needs no Docker and gives fast feedback; the `Redis integration` job starts its containers as [GitHub Actions service containers](https://docs.github.com/en/actions/use-cases-and-examples/using-containerized-services/about-service-containers) (official images, nothing is built).
 
 ---
 
@@ -377,7 +424,7 @@ Target: ≥ 85 % coverage (`pytest-cov`), no real network calls in the test suit
 
 ```mermaid
 flowchart LR
-    dev[git push] --> gha[GitHub Actions<br/>ruff · mypy · pytest]
+    dev[git push] --> gha[GitHub Actions<br/>checks · Redis integration]
     gha -- on main --> img[Build Docker image]
     img --> reg[(Artifact Registry)]
     reg --> run[Cloud Run<br/>FastAPI container]
@@ -386,7 +433,7 @@ flowchart LR
     tf[Terraform] -. provisions .-> run & mem & sql
 ```
 
-**Local development:** `docker compose up` starts only the infrastructure (`redis:7`, `postgres:16` for dev and a separate tmpfs-backed `db-test` for tests). The app runs on the host with `poetry run uvicorn app.main:app --reload` for fast reloads and debugging.
+**Local development:** `docker compose up` starts only the infrastructure: `redis:7.4-alpine` and `postgres:16` for dev, plus `redis-test` and a tmpfs-backed `db-test` for integration tests. The app runs on the host with `poetry run uvicorn app.main:app --reload` for fast reloads and debugging.
 
 **Full stack / CI:** the app's Docker image is added to compose under the `full` profile (`docker compose --profile full up`). CI builds this image and smoke-tests it, because the image is the artefact that gets deployed. Cloud deployment is an optional final step.
 

@@ -60,15 +60,30 @@ Branch: `phase-2-api`
 ## Phase 3 — Redis cache
 Branch: `phase-3-redis`
 
-- [ ] `docker-compose.yml` for local infrastructure (the app itself runs locally with `uvicorn --reload`): `redis` service
-- [ ] `redis.asyncio` client in lifespan, `REDIS_URL` setting
-- [ ] `CacheService` with keys/TTLs from ARCHITECTURE.md §6
-- [ ] `Cache-Control: max-age` headers matching the TTLs (REST "cacheable" constraint)
-- [ ] `cached: true/false` in responses
-- [ ] Graceful degradation when Redis is unavailable
-- [ ] Unit tests with `fakeredis`: hit, miss, Redis down
+Redis runs in Docker. Tests use a **real** Redis, not fakeredis: locally the `redis-test` container, in CI a GitHub Actions service container.
 
-**CI additions:** none (fakeredis, no service container needed)
+**Infrastructure**
+- [x] `docker-compose.yml`: `redis` (dev, port 6379, persistent volume) and `redis-test` (port 6380, no persistence), both `redis:7.4-alpine` with healthchecks. The app itself keeps running on the host with `uvicorn --reload`
+- [x] `REDIS_URL` setting; `redis.asyncio` client created in the lifespan and closed on shutdown
+
+**Caching**
+- [x] `Cache` interface (Protocol) + `RedisCache` implementation (string values, TTL per key; the service serialises models to JSON with Pydantic), key layout in `app/cache/keys.py`
+- [x] Cache-aside in `WeatherService` with the keys/TTLs from ARCHITECTURE.md §6: geocoding 7 days, current weather 10 min, forecast 1 h
+- [x] `cached: true/false` in weather responses
+- [x] Graceful degradation: if Redis is down, log a warning and call the upstream API as if there were no cache
+- [x] `Cache-Control: public, max-age=<TTL>` response headers matching the TTLs (REST "cacheable" constraint)
+- [x] `GET /health/ready` checks Redis (`503` if unreachable); the Postgres check is added in Phase 4
+
+**Tests**
+- [x] `integration` pytest marker for tests that need real infrastructure
+- [x] `RedisCache` integration tests against real Redis: get/set, JSON round-trip, TTL expiry, Redis down (client pointed at a closed port)
+- [x] `WeatherService` unit tests with a small in-memory `Cache` test double (a double of *our own* interface, not an imitation of Redis): hit skips the HTTP call, miss stores the result, cache errors are ignored
+- [x] Integration tests fail with a hint (`docker compose up -d redis-test`) when the test Redis is not reachable, locally and in CI; they are never skipped
+- [x] poe tasks: `test-unit` (`-m "not integration"`), `test-integration` (`-m integration`); `test-cov` runs everything with the coverage gate
+
+**CI additions:** the pipeline is split into two jobs, and both are required checks in the `main` ruleset:
+- `checks` (check name `Lint, type-check, test`, unchanged so the existing ruleset keeps working): lint · format check · type check · unit + API tests (no Docker)
+- `Redis integration`: `redis:7.4-alpine` service container · integration tests · coverage gate over the whole suite
 
 ---
 
@@ -82,10 +97,10 @@ Branch: `phase-4-postgres`
 - [ ] `SearchHistoryRepository` (insert, recent, popular)
 - [ ] Save searches via `BackgroundTasks`
 - [ ] `GET /api/v1/history`, `GET /api/v1/history/popular`
-- [ ] `GET /health/ready` checks Redis + Postgres
-- [ ] Repository + endpoint tests against a real Postgres
+- [ ] `GET /health/ready` also checks Postgres
+- [ ] Repository + endpoint tests against the real `db-test` Postgres (`integration` marker)
 
-**CI additions:** `postgres:16` service container · `alembic upgrade head` before tests · `alembic check` (models and migrations in sync)
+**CI additions:** `postgres:16` service container in the `integration` job · `alembic upgrade head` before tests · `alembic check` (models and migrations in sync)
 
 ---
 
