@@ -9,6 +9,7 @@ Async REST API that shows the current weather and a daily forecast for a city en
 
 - Python 3.12
 - [Poetry](https://python-poetry.org/) 2.x (`brew install poetry` on macOS)
+- Node.js 24+ and npm (for the web frontend)
 - Docker with Docker Compose (for Redis, and to run the whole app in containers)
 
 ## Setup
@@ -17,15 +18,17 @@ Async REST API that shows the current weather and a daily forecast for a city en
 poetry install                    # create the virtualenv and install all dependencies
 cp .env.example .env              # local settings (never committed)
 poetry run pre-commit install     # run the checks automatically on every git commit
+npm --prefix frontend ci          # install the frontend dependencies
 ```
 
 ## Two ways to run
 
 | | Development | Full stack |
 |---|---|---|
-| App runs | on your machine (`uvicorn --reload`, restarts on every change) | in the `api` container (the image that gets deployed) |
-| Docker runs | Redis only | Redis + the app |
-| Use it for | writing code, debugging | checking the real image, demos |
+| App runs | on your machine: API with `uvicorn --reload`, frontend with `npm run dev` (both reload on every change) | in the `api` and `web` containers (the images that get deployed) |
+| Docker runs | Redis only | Redis + API + web |
+| Open | http://localhost:5173 | http://localhost:8080 |
+| Use it for | writing code, debugging | checking the real images, demos |
 
 ## Infrastructure (Docker)
 
@@ -59,26 +62,74 @@ poetry run uvicorn app.main:app --reload
 | http://localhost:8000/health | `{"status":"ok"}`: the app is running |
 | http://localhost:8000/health/ready | `200` if Redis is reachable, `503` if not |
 
-There is no page at `/` yet (it returns a `NOT_FOUND` error). The web frontend arrives in Phase 5 (see ROADMAP.md).
+The API itself has no page at `/` (it returns a `NOT_FOUND` error); the web page is the frontend below.
+
+## Run the frontend
+
+With the API running (previous section), in a second terminal:
+
+```bash
+cd frontend
+npm run dev          # http://localhost:5173, reloads on every change
+```
+
+The Vite dev server forwards `/api` and `/health` to http://localhost:8000, so the browser talks to one
+origin and no CORS setup is needed (another backend: `API_PROXY_TARGET=http://localhost:8001 npm run dev`).
+
+| What | Where |
+|------|-------|
+| Search | type a city; the search is kept in the URL (`/?city=Prague`, or `/?id=4401659&city=Odessa` for one exact place), so it can be bookmarked, shared and the back button works |
+| Ambiguous names | "Not the place you meant? See 19 other places matching “Odessa”" opens `/places?q=Odessa`: every place the name matches, each linking to exactly that place (Odessa, Missouri instead of Odesa, Ukraine) |
+| Units | °C / °F toggle, remembered in the browser |
+| Languages | English, Українська, Čeština, Русский in the header (🌐); remembered in the browser, the browser's language is the first default. Place names, weather descriptions and dates follow the language, and a city can be typed in any of these alphabets (`Київ` works with an English interface) |
+| Errors | each backend error code has its own message; temporary problems offer "Try again" |
+
+### The API contract
+
+The frontend's TypeScript types are **generated** from the backend's OpenAPI schema
+(`frontend/openapi.json` → `frontend/src/api/schema.d.ts`). After changing an API model or endpoint:
+
+```bash
+poetry run poe generate-api      # export the schema and regenerate the types
+npm --prefix frontend run type-check
+```
+
+The type check then points at every component that has to follow the change, and CI fails if the
+committed types do not match the backend.
+
+### Frontend checks
+
+```bash
+cd frontend
+npm run check        # lint (ESLint), format check (Prettier), type check (vue-tsc), tests (Vitest)
+npm run lint:fix     # fix lint problems
+npm run format       # format the code
+npm run test:watch   # re-run tests on every change
+npm run build        # production build into dist/
+```
 
 ## Run the full stack in Docker
 
 ```bash
-docker compose --profile full up -d --build    # build the API image, start api + redis
-docker compose --profile full ps               # api should be "healthy"
-poetry run poe smoke-test                      # end-to-end check against http://localhost:8000
+docker compose --profile full up -d --build    # build the images, start web + api + redis
+docker compose --profile full ps               # api and web should be "healthy"
+open http://localhost:8080                     # the app
+poetry run poe smoke-test http://localhost:8000 http://localhost:8080   # end-to-end check
 docker compose --profile full logs -f api      # follow the API logs (Ctrl+C to stop following)
 docker compose --profile full down             # stop everything
 ```
 
-The app is at the same URLs as above (http://localhost:8000/docs, ...). Stop a running dev server first,
-or use another host port: `API_PORT=8001 docker compose --profile full up -d`.
+- **http://localhost:8080** is the web app. nginx serves it and forwards `/api`, `/health` and
+  `/docs` to the API container, so http://localhost:8080/docs works too.
+- The API is also published directly on http://localhost:8000. Stop a running dev server first, or
+  use other host ports: `API_PORT=8001 WEB_PORT=8081 docker compose --profile full up -d`.
 
 - Without `--profile full`, `docker compose up` still starts only the infrastructure.
 - The container reads optional settings from `.env` (e.g. `GEOCODING_PROVIDER`), but always uses
   `REDIS_URL=redis://redis:6379/0`, the Redis container's name inside the Compose network.
-- The image runs as a non-root user and contains only `app/` and its runtime dependencies
-  (no tests, no `.env`, no dev tools). `.dockerignore` is an allow-list, so nothing else can slip in.
+- Both images run as non-root users. The API image contains only `app/` and its runtime dependencies;
+  the web image only nginx and the built files. Both `.dockerignore` files are allow-lists, so tests,
+  `.env` or `node_modules` cannot slip in.
 - Docker's healthcheck uses `/health` (liveness): a Redis outage makes `/health/ready` return `503`,
   but the container stays healthy and keeps answering, just without the cache.
 
@@ -89,14 +140,17 @@ container works end to end; the test suite itself never calls external APIs.
 
 | Endpoint | Query parameters |
 |----------|------------------|
-| `GET /api/v1/weather/current` | `city` (required), `country` (ISO code, e.g. `CZ`), `units` (`metric` / `imperial`) |
+| `GET /api/v1/weather/current` | `city` (a name, not a postal code) **or** `id` (a `location.id`, exactly that place), `country` (ISO code, e.g. `CZ`), `region` (e.g. `Texas`, picks one of several same-name places in a country), `lang` (`en` / `uk` / `cs` / `ru`), `units` (`metric` / `imperial`) |
 | `GET /api/v1/weather/forecast` | same as above + `days` (1-16, default 7) |
-| `GET /api/v1/locations/search` | `q` (required), `country`, `limit` (1-10, default 5) |
+| `GET /api/v1/locations/search` | `q` (required), `country`, `lang`, `limit` (1-20, default 5) |
 | `GET /health`, `GET /health/ready` | |
 
 ```bash
 curl "http://localhost:8000/api/v1/weather/current?city=Prague"
 curl "http://localhost:8000/api/v1/weather/current?city=Paris&country=US&units=imperial"
+curl "http://localhost:8000/api/v1/weather/current?city=Odessa&country=US&region=Missouri"
+curl "http://localhost:8000/api/v1/weather/current?id=4401659&lang=uk"     # Одеса, Міссурі, США
+curl -G "http://localhost:8000/api/v1/weather/current" --data-urlencode "city=Київ"  # Kyiv, Ukraine
 curl "http://localhost:8000/api/v1/weather/forecast?city=Kyiv&days=3"
 curl "http://localhost:8000/api/v1/locations/search?q=Springfield&limit=3"
 ```
@@ -119,14 +173,16 @@ Look into the cache:
 
 ```bash
 docker compose exec redis redis-cli --scan          # list keys (copy exact names from here)
-docker compose exec redis redis-cli ttl geo:prague: # seconds left (note the trailing colon)
+docker compose exec redis redis-cli ttl geo:en:prague: # seconds left (note the trailing colon)
 docker compose exec redis redis-cli monitor         # watch every command live, Ctrl+C to stop
 docker compose exec redis redis-cli flushdb         # empty the dev cache
 ```
 
 `ttl` returns the seconds left, `-2` if the key does not exist (wrong name, or already expired:
 current weather lives only 10 minutes) and `-1` if it has no expiry (never the case here).
-Place keys end with the country code, empty when none was given: `geo:prague:` vs `geo:prague:CZ`.
+Place keys start with the language and end with the country code, empty when none was given:
+`geo:en:prague:` vs `geo:uk:prague:CZ`. A region is added only when one was given
+(`geo:en:odessa:US:missouri`); places looked up by id are `place:4401659:uk`.
 
 ### Errors
 
@@ -136,6 +192,9 @@ Every error uses the same format:
 curl "http://localhost:8000/api/v1/weather/current?city=Qwertyuiopxyz"
 # 404 {"error":{"code":"CITY_NOT_FOUND","message":"No place found for 'Qwertyuiopxyz'."}}
 
+curl "http://localhost:8000/api/v1/weather/current?city=Germany"
+# 404 {"error":{"code":"NOT_A_CITY","message":"'Germany' is a country, not a city."}}
+
 curl "http://localhost:8000/api/v1/weather/forecast?city=Prague&days=40"
 # 422 {"error":{"code":"VALIDATION_ERROR","message":"Invalid request parameters.",
 #      "details":[{"field":"days","location":"query","message":"Input should be less than or equal to 16"}]}}
@@ -144,8 +203,11 @@ curl "http://localhost:8000/api/v1/weather/forecast?city=Prague&days=40"
 | Status | `code` | When |
 |--------|--------|------|
 | 404 | `CITY_NOT_FOUND` | No place matches the name |
+| 404 | `NOT_A_CITY` | The name is a country (`Germany`): there is no single place to show |
+| 404 | `LOCATION_NOT_FOUND` | No populated place has this `id` |
+| 501 | `NOT_SUPPORTED` | The geocoding provider cannot do it: GeoNames (via geopy) has no lookup by `id` |
 | 404 / 405 | `NOT_FOUND` / `METHOD_NOT_ALLOWED` | Unknown URL / wrong HTTP method |
-| 422 | `VALIDATION_ERROR` | Invalid query parameters (`details` lists each one) |
+| 422 | `VALIDATION_ERROR` | Invalid query parameters (`details` lists each one), e.g. neither `city` nor `id` |
 | 502 | `UPSTREAM_ERROR` | Open-Meteo / GeoNames returned an error |
 | 504 | `UPSTREAM_TIMEOUT` | Open-Meteo / GeoNames did not answer in time |
 
@@ -189,13 +251,14 @@ poetry run poe --help            # list all tasks
 
 ### CI
 
-Three jobs run on every pull request; all are required checks for merging into `main`:
+Four jobs run on every pull request; all are required checks for merging into `main`:
 
 | Job | Steps |
 |-----|-------|
 | `Lint, type-check, test` | lint, format check, mypy, unit + API tests |
 | `Redis integration` | starts `redis:7.4-alpine` as a service container, runs the integration tests, then all tests with the coverage gate |
-| `Docker image` | builds the API image, starts the full stack with Compose, runs `scripts/smoke_test.sh` against it |
+| `Docker image` | builds the API and web images, starts the full stack with Compose, runs `scripts/smoke_test.sh` against both |
+| `Frontend` | API types match the backend, ESLint, Prettier, vue-tsc, Vitest, production build |
 
 Tip: after `eval $(poetry env activate)` the `poetry run` prefix can be dropped (`poe check`).
 

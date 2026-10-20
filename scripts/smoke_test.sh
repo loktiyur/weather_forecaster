@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Smoke test for a running API (full stack container, or a dev server).
-# Used by the `Docker image` CI job and locally:  poetry run poe smoke-test [BASE_URL]
+# Smoke test for a running stack (full stack containers, or dev servers).
+# Used by the `Docker image` CI job and locally:  poetry run poe smoke-test [API_URL] [WEB_URL]
+#   API_URL  default http://localhost:8000
+#   WEB_URL  optional, e.g. http://localhost:8080: also checks the web frontend and its /api proxy
 #
 # Calls the real Open-Meteo API once (unlike the test suite), because its purpose is to
 # prove the *deployed* container works end to end. curl retries transient errors.
 set -euo pipefail
 
 BASE_URL="${1:-http://localhost:8000}"
+WEB_URL="${2:-}"
 CURL=(curl --silent --show-error --fail --max-time 10 --retry 3 --retry-delay 2)
 ERROR_BODY=$(mktemp)
 trap 'rm -f "$ERROR_BODY"' EXIT
@@ -38,4 +41,17 @@ status=$(curl --silent --output "$ERROR_BODY" --write-out '%{http_code}' \
 [[ "$status" == "422" ]] || { echo "expected 422, got $status"; exit 1; }
 json_check 'd["error"]["code"] == "VALIDATION_ERROR"' < "$ERROR_BODY" && echo "ok: 422 VALIDATION_ERROR"
 
-printf '\nSmoke test passed for %s\n' "$BASE_URL"
+if [[ -n "$WEB_URL" ]]; then
+    step "Web: the app page is served"
+    page=$("${CURL[@]}" --retry 15 --retry-connrefused --retry-delay 1 "$WEB_URL/")
+    grep -q '<div id="app">' <<< "$page" && echo "ok"
+
+    step "Web: deep links fall back to the app (single-page app)"
+    "${CURL[@]}" "$WEB_URL/some/deep/link" | grep -q '<div id="app">' && echo "ok"
+
+    step "Web: /api is proxied to the API"
+    proxied=$("${CURL[@]}" "$WEB_URL/api/v1/weather/current?city=Prague&country=CZ")
+    json_check 'd["location"]["name"] == "Prague" and d["cached"] is True' <<< "$proxied" && echo "ok"
+fi
+
+printf '\nSmoke test passed for %s %s\n' "$BASE_URL" "$WEB_URL"

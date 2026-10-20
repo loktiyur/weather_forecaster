@@ -1,0 +1,51 @@
+{
+  "app": {
+    "title": "Předpověď počasí",
+    "language": "Jazyk",
+    "attribution": "Data o počasí: {source} (CC BY 4.0)"
+  },
+  "search": {
+    "label": "Město",
+    "placeholder": "Hledat město, např. Praha",
+    "submit": "Hledat",
+    "needsLetter": "Zadejte název města. PSČ a čísla nejsou podporována.",
+    "idle": "Zadejte město a uvidíte aktuální počasí a předpověď na 7 dní.",
+    "loading": "Načítání počasí"
+  },
+  "units": {
+    "label": "Jednotky",
+    "metric": "Metrické: °C, km/h",
+    "imperial": "Imperiální: °F, mph"
+  },
+  "weather": {
+    "localTime": "Místní čas {time}",
+    "cached": "z mezipaměti",
+    "cachedTitle": "Data z mezipaměti",
+    "feelsLike": "Pocitově",
+    "humidity": "Vlhkost",
+    "wind": "Vítr",
+    "forecastTitle": "Předpověď na {n} den | Předpověď na {n} dny | Předpověď na {n} dní"
+  },
+  "places": {
+    "notMeant": "Hledali jste jiné místo?",
+    "seeOther": "Zobrazit {n} další místo pro „{name}“ | Zobrazit {n} další místa pro „{name}“ | Zobrazit {n} dalších míst pro „{name}“",
+    "seeAll": "Zobrazit všechna místa pro „{name}“",
+    "title": "Místa pro „{name}“",
+    "back": "← Zpět na počasí",
+    "loading": "Načítání míst",
+    "none": "Pro „{name}“ jsme nic nenašli. Zkontrolujte pravopis.",
+    "cutOff": "Zobrazeno prvních {n} výsledků. Zadejte celý název a seznam se zúží."
+  },
+  "errors": {
+    "cityNotFound": "„{city}“ jsme nenašli. Zkontrolujte pravopis nebo zkuste větší město v okolí.",
+    "notACity": "„{city}“ je země, ne město. Zadejte město v ní, například hlavní město.",
+    "placesNamed": "Místa s názvem „{city}“",
+    "notACityName": "„{city}“ není název města. Zadejte název, např. Praha.",
+    "locationNotFound": "Toto místo jsme nenašli. Vyhledejte ho podle názvu.",
+    "notSupported": "Tento server neumí otevírat místa z odkazu. Vyhledejte místo podle názvu.",
+    "upstream": "Služba počasí teď neodpovídá. Zkuste to prosím za chvíli znovu.",
+    "network": "Nelze se spojit se serverem. Zkontrolujte připojení a zkuste to znovu.",
+    "unknown": "Něco se pokazilo. Zkuste to prosím znovu.",
+    "retry": "Zkusit znovu"
+  }
+}

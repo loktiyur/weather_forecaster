@@ -1,0 +1,11 @@
+# Allow-list: only what `npm ci` + `npm run build` and the nginx stage need.
+*
+!package.json
+!package-lock.json
+!index.html
+!env.d.ts
+!vite.config.ts
+!tsconfig*.json
+!src/
+!public/
+!nginx.conf

@@ -9,8 +9,9 @@ from tests.conftest import UNREACHABLE_REDIS_URL
 
 
 def test_geocoding_key_is_normalised() -> None:
-    assert geocoding_key("  Prague ", None) == "geo:prague:"
-    assert geocoding_key("PRAGUE", "cz") == "geo:prague:CZ"
+    assert geocoding_key("  Prague ", None) == "geo:en:prague:"
+    assert geocoding_key("PRAGUE", "cz") == "geo:en:prague:CZ"
+    assert geocoding_key("Odessa", "US", " Texas ") == "geo:en:odessa:US:texas"
 
 
 def test_weather_keys_round_coordinates() -> None:

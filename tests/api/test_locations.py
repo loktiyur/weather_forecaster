@@ -16,19 +16,29 @@ async def test_search_returns_results(client: AsyncClient, respx_mock: respx.Moc
     [prague] = response.json()["results"]
     assert prague["name"] == "Prague"
     assert prague["timezone"] == "Europe/Prague"
-    params = geocoding.calls.last.request.url.params
-    assert params["count"] == "3"
-    assert params["countryCode"] == "CZ"
+    assert geocoding.calls.last.request.url.params["countryCode"] == "CZ"
 
 
 async def test_search_defaults_to_5_results(
     client: AsyncClient, respx_mock: respx.MockRouter
 ) -> None:
-    geocoding = mock_geocoding(respx_mock)
+    mock_geocoding(respx_mock, "geocoding_odessa")
 
-    await client.get(SEARCH, params={"q": "Prague"})
+    response = await client.get(SEARCH, params={"q": "Odessa"})
 
-    assert geocoding.calls.last.request.url.params["count"] == "5"
+    assert len(response.json()["results"]) == 5
+
+
+async def test_search_returns_only_populated_places(
+    client: AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    mock_geocoding(respx_mock, "geocoding_odessa")  # 8 towns and "Odessa Dam"
+
+    response = await client.get(SEARCH, params={"q": "Odessa", "limit": 20})
+
+    names = [place["name"] for place in response.json()["results"]]
+    assert len(names) == 8
+    assert "Odessa Dam" not in names
 
 
 async def test_search_without_matches_returns_empty_list(
@@ -44,7 +54,12 @@ async def test_search_without_matches_returns_empty_list(
 
 @pytest.mark.parametrize(
     ("params", "field"),
-    [({}, "q"), ({"q": "Prague", "limit": 0}, "limit"), ({"q": "Prague", "limit": 11}, "limit")],
+    [
+        ({}, "q"),
+        ({"q": "12345"}, "q"),
+        ({"q": "Prague", "limit": 0}, "limit"),
+        ({"q": "Prague", "limit": 21}, "limit"),
+    ],
 )
 async def test_search_validation(client: AsyncClient, params: dict[str, str], field: str) -> None:
     response = await client.get(SEARCH, params=params)

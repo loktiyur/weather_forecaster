@@ -94,14 +94,23 @@ jobs:
           context: .
           load: true
           tags: weather-forecaster-api:local
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          load: true
+          tags: weather-forecaster-web:local
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
 
       - name: Start full stack
         run: docker compose --profile full up --detach --no-build --wait --wait-timeout 90
 
       - name: Smoke test
-        run: bash scripts/smoke_test.sh http://localhost:8000
+        run: bash scripts/smoke_test.sh http://localhost:8000 http://localhost:8080
 
       - name: Container logs
         if: failure()
@@ -110,3 +119,59 @@ jobs:
       - name: Shut down
         if: always()
         run: docker compose --profile full down --volumes
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Python is needed only to export the backend's OpenAPI schema (the API contract).
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: poetry
+
+      - name: Install backend runtime dependencies
+        working-directory: .
+        run: poetry install --no-interaction --only main
+
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+
+      # Regenerate the schema and the TypeScript types from the current backend code;
+      # a difference means the committed frontend types no longer match the API.
+      - name: API types are up to date
+        working-directory: .
+        run: |
+          PYTHONPATH=. poetry run python scripts/export_openapi.py frontend/openapi.json
+          npm --prefix frontend run generate:api
+          git diff --exit-code -- frontend/openapi.json frontend/src/api/schema.d.ts \
+            || { echo "::error::The API changed. Run 'poetry run poe generate-api' and commit the result."; exit 1; }
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Type check
+        run: npm run type-check
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build

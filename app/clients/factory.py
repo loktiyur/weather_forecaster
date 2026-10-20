@@ -14,4 +14,6 @@ def create_geocoding_client(settings: Settings, http: httpx.AsyncClient) -> Geoc
         return GeoNamesGeocodingClient.from_username(
             settings.geonames_username, timeout=settings.http_timeout_seconds
         )
-    return OpenMeteoGeocodingClient(http, settings.open_meteo_geocoding_url)
+    return OpenMeteoGeocodingClient(
+        http, settings.open_meteo_geocoding_url, settings.open_meteo_place_url
+    )

@@ -24,5 +24,7 @@ async def search_locations(
     Returns an empty `results` list, not 404, when nothing matches: an empty
     search result is a valid answer.
     """
-    results = await service.search_locations(query.q, limit=query.limit, country_code=query.country)
+    results = await service.search_locations(
+        query.q, limit=query.limit, country_code=query.country, language=query.lang
+    )
     return LocationSearchResponse(results=results)

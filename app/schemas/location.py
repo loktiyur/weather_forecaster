@@ -4,6 +4,12 @@ from pydantic import BaseModel, Field
 class Location(BaseModel):
     """A place resolved from the name the user typed."""
 
+    id: int | None = Field(
+        default=None,
+        description="GeoNames id: stable and the same in every language. Pass it as `id` to "
+        "the weather endpoints to get exactly this place",
+        examples=[3067696],
+    )
     name: str = Field(examples=["Prague"])
     country: str | None = Field(default=None, examples=["Czechia"])
     country_code: str | None = Field(

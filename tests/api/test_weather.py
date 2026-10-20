@@ -3,7 +3,8 @@ import pytest
 import respx
 from httpx import AsyncClient
 
-from tests.api.upstream import mock_forecast, mock_geocoding
+from tests.api.upstream import GEOCODING_URL, PLACE_URL, mock_forecast, mock_geocoding, mock_place
+from tests.fixtures import load_fixture
 
 CURRENT = "/api/v1/weather/current"
 FORECAST = "/api/v1/weather/forecast"
@@ -120,13 +121,16 @@ async def test_upstream_timeout_returns_504(
 @pytest.mark.parametrize(
     ("params", "field"),
     [
-        ({}, "city"),
         ({"city": ""}, "city"),
         ({"city": "   "}, "city"),
         ({"city": "x" * 101}, "city"),
+        ({"city": "10001"}, "city"),
+        ({"city": "123"}, "city"),
+        ({"city": "-- 42 --"}, "city"),
         ({"city": "Prague", "country": "CZE"}, "country"),
         ({"city": "Prague", "country": "1Z"}, "country"),
         ({"city": "Prague", "units": "kelvin"}, "units"),
+        ({"city": "Prague", "region": "x" * 101}, "region"),
     ],
 )
 async def test_current_weather_validation(
@@ -139,6 +143,73 @@ async def test_current_weather_validation(
     assert error["code"] == "VALIDATION_ERROR"
     assert [d["field"] for d in error["details"]] == [field]
     assert error["details"][0]["location"] == "query"
+
+
+async def test_city_without_letters_is_not_sent_upstream(
+    client: AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    response = await client.get(CURRENT, params={"city": "75001"})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["details"][0]["message"] == (
+        "Value error, must contain at least one letter"
+    )
+    assert not respx_mock.calls
+
+
+@pytest.mark.parametrize("city", ["Київ", "東京", "'s-Hertogenbosch", "Saint-Étienne"])
+async def test_city_names_in_any_script_are_accepted(
+    client: AsyncClient, respx_mock: respx.MockRouter, city: str
+) -> None:
+    mock_geocoding(respx_mock, "geocoding_not_found")
+
+    response = await client.get(CURRENT, params={"city": city})
+
+    assert response.status_code == 404  # validation passed; the (mocked) geocoder found nothing
+
+
+async def test_region_selects_the_place(client: AsyncClient, respx_mock: respx.MockRouter) -> None:
+    geocoding = mock_geocoding(respx_mock, "geocoding_odessa")
+    mock_forecast(respx_mock, "forecast_current")
+
+    response = await client.get(
+        CURRENT, params={"city": "Odessa", "country": "US", "region": "Missouri"}
+    )
+
+    assert response.status_code == 200
+    location = response.json()["location"]
+    assert (location["name"], location["region"]) == ("Odessa", "Missouri")
+    assert geocoding.calls.last.request.url.params["countryCode"] == "US"
+
+
+async def test_country_name_returns_not_a_city(
+    client: AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get(GEOCODING_URL).respond(
+        json={
+            "results": [
+                {"name": "Germany", "latitude": 51.5, "longitude": 10.5, "feature_code": "PCLI"}
+            ]
+        }
+    )
+
+    response = await client.get(FORECAST, params={"city": "Germany"})
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {"code": "NOT_A_CITY", "message": "'Germany' is a country, not a city."}
+    }
+
+
+async def test_unknown_region_returns_404(
+    client: AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    mock_geocoding(respx_mock, "geocoding_odessa")
+
+    response = await client.get(CURRENT, params={"city": "Odessa", "region": "Ohio"})
+
+    assert response.status_code == 404
+    assert response.json()["error"]["message"] == "No place found for 'Odessa, Ohio'."
 
 
 @pytest.mark.parametrize("days", ["0", "17", "seven"])
@@ -198,3 +269,69 @@ async def test_error_responses_have_no_cache_control(
 
     assert response.status_code == 404
     assert "cache-control" not in response.headers
+
+
+async def test_city_or_id_is_required(client: AsyncClient) -> None:
+    response = await client.get(CURRENT, params={"units": "metric"})
+
+    assert response.status_code == 422
+    [detail] = response.json()["error"]["details"]
+    assert detail["message"] == "Value error, either `city` or `id` is required"
+
+
+async def test_id_selects_the_place_in_the_requested_language(
+    client: AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    place = mock_place(respx_mock, "place_kyiv_uk")
+    mock_forecast(respx_mock, "forecast_current")
+
+    response = await client.get(CURRENT, params={"id": 703448, "lang": "uk", "city": "ignored"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["location"]["id"], body["location"]["name"]) == (703448, "Київ")
+    assert body["current"]["description"] == "Ясне небо"  # weather_code 0 in the fixture
+    assert body["units"]["wind_speed"] == "км/год"
+    assert place.calls.last.request.url.params["language"] == "uk"
+
+
+async def test_unknown_id_returns_location_not_found(
+    client: AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get(PLACE_URL).respond(400, json={"error": True, "reason": "Location ID not found."})
+
+    response = await client.get(FORECAST, params={"id": 999999999})
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {"code": "LOCATION_NOT_FOUND", "message": "No place found with id 999999999."}
+    }
+
+
+async def test_cyrillic_name_with_english_interface(
+    client: AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    # The English search finds nothing for "Київ"; the Ukrainian one does, and the place is
+    # then looked up by id in English.
+    def geocoding(request: httpx.Request) -> httpx.Response:
+        if request.url.params["language"] == "uk":
+            return httpx.Response(200, json=load_fixture("geocoding_kyiv_uk"))
+        return httpx.Response(200, json={})
+
+    respx_mock.get(GEOCODING_URL).mock(side_effect=geocoding)
+    mock_place(respx_mock, "place_kyiv_en")
+    mock_forecast(respx_mock, "forecast_current")
+
+    response = await client.get(CURRENT, params={"city": "Київ"})
+
+    assert response.status_code == 200
+    location = response.json()["location"]
+    assert (location["name"], location["country"]) == ("Kyiv", "Ukraine")
+    assert response.json()["current"]["description"] == "Clear sky"
+
+
+async def test_unsupported_language_is_rejected(client: AsyncClient) -> None:
+    response = await client.get(CURRENT, params={"city": "Prague", "lang": "de"})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["details"][0]["field"] == "lang"

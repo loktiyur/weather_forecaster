@@ -5,8 +5,9 @@ from geopy import geocoders
 from geopy.exc import GeocoderServiceError, GeocoderTimedOut
 from pydantic import ValidationError
 
-from app.clients.base import GeocodingClient
-from app.core.exceptions import UpstreamServiceError, UpstreamTimeoutError
+from app.clients.base import GeocodingClient, SearchResult
+from app.core.exceptions import NotSupportedError, UpstreamServiceError, UpstreamTimeoutError
+from app.schemas.language import Language
 from app.schemas.location import Location
 
 SERVICE = "GeoNames"
@@ -17,6 +18,9 @@ class GeoNamesGeocodingClient(GeocodingClient):
 
     geopy's client is synchronous, so each call runs in a worker thread
     (`asyncio.to_thread`) to keep the event loop free.
+
+    Limits of geopy's GeoNames client: no `language` (names come in GeoNames' default
+    language) and no lookup by id (`get` raises `NotSupportedError`, answered with 501).
     """
 
     def __init__(self, geocoder: geocoders.GeoNames) -> None:
@@ -26,14 +30,14 @@ class GeoNamesGeocodingClient(GeocodingClient):
     def from_username(cls, username: str, timeout: float) -> "GeoNamesGeocodingClient":
         return cls(geocoders.GeoNames(username=username, timeout=timeout))
 
-    async def search(
-        self, name: str, *, count: int = 5, country_code: str | None = None
-    ) -> list[Location]:
-        # exactly_one=True makes geopy ask GeoNames for a single row instead of the default 100.
-        exactly_one = count == 1
+    async def find(
+        self, name: str, *, count: int, country_code: str | None, language: Language
+    ) -> SearchResult:
+        # All candidates (GeoNames' default of 100 rows): the first one may be a country or a
+        # region, which is filtered out below, so asking for a single row is not enough.
         try:
             found = await asyncio.to_thread(
-                self._geocoder.geocode, name, exactly_one=exactly_one, country=country_code
+                self._geocoder.geocode, name, exactly_one=False, country=country_code
             )
         except GeocoderTimedOut as exc:
             raise UpstreamTimeoutError(SERVICE) from exc
@@ -42,14 +46,21 @@ class GeoNamesGeocodingClient(GeocodingClient):
             raise UpstreamServiceError(SERVICE, str(exc)) from exc
 
         if not found:
-            return []
-        places = [found] if exactly_one else found[:count]
-        return [self._to_location(place.raw) for place in places]
+            return SearchResult([])
+        best = found[0].raw
+        country = best.get("name") if str(best.get("fcode", "")).startswith("PCL") else None
+        # Feature class P = populated place (A would be a country or region, H water, ...).
+        places = [place for place in found if place.raw.get("fcl", "P") == "P"][:count]
+        return SearchResult([self._to_location(place.raw) for place in places], country=country)
+
+    async def get(self, place_id: int, *, language: Language) -> Location | None:
+        raise NotSupportedError(SERVICE, "looking places up by id")
 
     @staticmethod
     def _to_location(raw: dict[str, Any]) -> Location:
         try:
             return Location(
+                id=raw.get("geonameId"),
                 name=raw["name"],
                 country=raw.get("countryName") or None,
                 country_code=raw.get("countryCode") or None,

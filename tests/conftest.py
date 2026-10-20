@@ -42,7 +42,9 @@ def weather_service(
 ) -> WeatherService:
     """The real service and clients; only the network is mocked (respx)."""
     return WeatherService(
-        geocoding=OpenMeteoGeocodingClient(http, settings.open_meteo_geocoding_url),
+        geocoding=OpenMeteoGeocodingClient(
+            http, settings.open_meteo_geocoding_url, settings.open_meteo_place_url
+        ),
         weather=OpenMeteoWeatherClient(http, settings.open_meteo_forecast_url),
         cache=cache,
     )

@@ -4,14 +4,17 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.api.dependencies import get_weather_service
-from app.clients.base import GeocodingClient
+from app.clients.base import GeocodingClient, SearchResult
+from app.clients.geonames_geocoding import GeoNamesGeocodingClient
 from app.config import Settings
 from app.main import create_app, lifespan
+from app.schemas.language import Language
 from app.schemas.location import Location
 from app.schemas.weather import CurrentWeather, DailyForecastDay, Units
 from app.services.weather_service import WeatherService
 from tests.api.upstream import mock_forecast, mock_geocoding
 from tests.doubles import UnavailableCache
+from tests.unit.clients.test_geonames_geocoding import FakeGeoNames
 
 
 async def test_unknown_route_uses_error_format(client: AsyncClient) -> None:
@@ -33,8 +36,15 @@ async def test_openapi_documents_error_responses(client: AsyncClient) -> None:
     schema = (await client.get("/openapi.json")).json()
 
     current = schema["paths"]["/api/v1/weather/current"]["get"]
-    assert set(current["responses"]) == {"200", "404", "422", "502", "504"}
-    assert [p["name"] for p in current["parameters"]] == ["city", "country", "units"]
+    assert set(current["responses"]) == {"200", "404", "422", "501", "502", "504"}
+    assert [p["name"] for p in current["parameters"]] == [
+        "city",
+        "id",
+        "country",
+        "region",
+        "lang",
+        "units",
+    ]
 
 
 async def test_ready_when_cache_is_reachable(client: AsyncClient) -> None:
@@ -81,10 +91,13 @@ async def test_lifespan_wires_the_real_service(
 
 
 class FakeGeocodingClient(GeocodingClient):
-    async def search(
-        self, name: str, *, count: int = 5, country_code: str | None = None
-    ) -> list[Location]:
-        return []
+    async def find(
+        self, name: str, *, count: int, country_code: str | None, language: Language
+    ) -> SearchResult:
+        return SearchResult([])
+
+    async def get(self, place_id: int, *, language: Language) -> Location | None:
+        return None
 
 
 class FakeWeatherClient:
@@ -97,3 +110,21 @@ class FakeWeatherClient:
         self, latitude: float, longitude: float, *, days: int = 7, units: Units = Units.METRIC
     ) -> list[DailyForecastDay]:
         raise NotImplementedError
+
+
+async def test_lookup_by_id_without_provider_support_returns_501(
+    app: FastAPI, client: AsyncClient
+) -> None:
+    app.dependency_overrides[get_weather_service] = lambda: WeatherService(
+        GeoNamesGeocodingClient(FakeGeoNames()), FakeWeatherClient()
+    )
+
+    response = await client.get("/api/v1/weather/current", params={"id": 703448})
+
+    assert response.status_code == 501
+    assert response.json() == {
+        "error": {
+            "code": "NOT_SUPPORTED",
+            "message": "GeoNames does not support looking places up by id.",
+        }
+    }

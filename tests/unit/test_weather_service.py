@@ -5,9 +5,10 @@ from typing import Any
 import pytest
 
 from app.cache.base import Cache
-from app.clients.base import GeocodingClient
+from app.clients.base import GeocodingClient, SearchResult
 from app.config import Settings
-from app.core.exceptions import CityNotFoundError
+from app.core.exceptions import CityNotFoundError, LocationNotFoundError, NotACityError
+from app.schemas.language import Language
 from app.schemas.location import Location
 from app.schemas.weather import CurrentWeather, DailyForecastDay, Units
 from app.services.weather_service import CacheTtls, WeatherService
@@ -37,15 +38,26 @@ DAY = DailyForecastDay(
 
 
 class FakeGeocoding(GeocodingClient):
-    def __init__(self, places: list[Location]) -> None:
+    def __init__(
+        self,
+        places: list[Location],
+        country: str | None = None,
+        by_id: dict[int, Location] | None = None,
+    ) -> None:
         self.places = places
+        self.country = country
+        self.by_id = by_id or {}
         self.calls: list[dict[str, Any]] = []
 
-    async def search(
-        self, name: str, *, count: int = 5, country_code: str | None = None
-    ) -> list[Location]:
+    async def find(
+        self, name: str, *, count: int, country_code: str | None, language: Language
+    ) -> SearchResult:
         self.calls.append({"name": name, "count": count, "country_code": country_code})
-        return self.places[:count]
+        return SearchResult(self.places[:count], country=self.country)
+
+    async def get(self, place_id: int, *, language: Language) -> Location | None:
+        self.calls.append({"id": place_id, "language": language})
+        return self.by_id.get(place_id)
 
 
 @dataclass
@@ -63,6 +75,73 @@ class FakeWeather:
     ) -> list[DailyForecastDay]:
         self.calls.append({"method": "daily", "days": days, "units": units})
         return [DAY] * days
+
+
+ODESSA_TX = Location(
+    name="Odessa", country_code="US", region="Texas", latitude=31.85, longitude=-102.37
+)
+ODESSA_MO = Location(
+    name="Odessa", country_code="US", region="Missouri", latitude=38.99, longitude=-93.95
+)
+
+
+async def test_region_selects_one_of_several_same_name_places() -> None:
+    geocoding = FakeGeocoding([ODESSA_TX, ODESSA_MO])
+    service = WeatherService(geocoding, FakeWeather(), cache=InMemoryCache())
+
+    result = await service.get_current("Odessa", country_code="US", region="missouri")
+
+    assert result.location == ODESSA_MO
+    assert geocoding.calls == [{"name": "Odessa", "count": 20, "country_code": "US"}]
+
+
+async def test_region_lookup_ignores_places_that_only_contain_the_name() -> None:
+    saint_paris = Location(
+        name="Saint Paris", country_code="US", region="Ohio", latitude=40.13, longitude=-83.96
+    )
+    paris = Location(
+        name="Paris", country_code="US", region="Ohio", latitude=40.8, longitude=-81.16
+    )
+    service = WeatherService(FakeGeocoding([saint_paris, paris]), FakeWeather())
+
+    result = await service.get_current("paris", country_code="US", region="Ohio")
+
+    assert result.location == paris
+
+
+async def test_a_country_name_raises_not_a_city() -> None:
+    germany_georgia = Location(
+        name="Germany", country_code="US", region="Georgia", latitude=34.9, longitude=-83.47
+    )
+    cache = InMemoryCache()
+    service = WeatherService(
+        FakeGeocoding([germany_georgia], country="Germany"), FakeWeather(), cache
+    )
+
+    with pytest.raises(NotACityError, match="'Germany' is a country"):
+        await service.get_current("germany")
+    assert cache.values == {}  # errors are not cached
+
+    # The search still lists the towns, so the user can pick one of them.
+    assert await service.search_locations("germany") == [germany_georgia]
+
+
+async def test_unknown_region_raises_city_not_found() -> None:
+    service = WeatherService(FakeGeocoding([ODESSA_TX, ODESSA_MO]), FakeWeather())
+
+    with pytest.raises(CityNotFoundError, match="Odessa, Ohio"):
+        await service.get_forecast("Odessa", country_code="US", region="Ohio")
+
+
+async def test_places_with_and_without_region_are_cached_separately() -> None:
+    cache = InMemoryCache()
+    service = WeatherService(FakeGeocoding([ODESSA_TX, ODESSA_MO]), FakeWeather(), cache=cache)
+
+    await service.get_current("Odessa", country_code="US")
+    await service.get_current("Odessa", country_code="US", region="Missouri")
+
+    assert Location.model_validate_json(cache.values["geo:en:odessa:US"]) == ODESSA_TX
+    assert Location.model_validate_json(cache.values["geo:en:odessa:US:missouri"]) == ODESSA_MO
 
 
 async def test_get_current_geocodes_then_fetches_weather() -> None:
@@ -137,8 +216,8 @@ async def test_cache_miss_stores_results_with_their_ttls() -> None:
     result = await service.get_current("Prague", units=Units.IMPERIAL)
 
     assert result.cached is False
-    assert cache.ttls == {"geo:prague:": 100, "weather:current:50.08:14.42:imperial": 10}
-    assert Location.model_validate_json(cache.values["geo:prague:"]) == PRAGUE
+    assert cache.ttls == {"geo:en:prague:": 100, "weather:current:50.08:14.42:imperial": 10}
+    assert Location.model_validate_json(cache.values["geo:en:prague:"]) == PRAGUE
 
 
 async def test_cache_hit_skips_both_clients() -> None:
@@ -197,7 +276,7 @@ async def test_unavailable_cache_falls_back_to_the_clients(
 async def test_unreadable_cache_entry_is_treated_as_a_miss(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    cache = InMemoryCache(values={"geo:prague:": '{"old": "format"}'})
+    cache = InMemoryCache(values={"geo:en:prague:": '{"old": "format"}'})
     geocoding = FakeGeocoding([PRAGUE])
     service = WeatherService(geocoding, FakeWeather(), cache)
 
@@ -205,8 +284,8 @@ async def test_unreadable_cache_entry_is_treated_as_a_miss(
 
     assert result.location == PRAGUE
     assert len(geocoding.calls) == 1
-    assert Location.model_validate_json(cache.values["geo:prague:"]) == PRAGUE  # overwritten
-    assert "unreadable cache entry geo:prague:" in caplog.text
+    assert Location.model_validate_json(cache.values["geo:en:prague:"]) == PRAGUE  # overwritten
+    assert "unreadable cache entry geo:en:prague:" in caplog.text
 
 
 async def test_unknown_city_is_not_cached() -> None:
@@ -236,3 +315,62 @@ def test_cache_ttls_from_settings() -> None:
     )
 
     assert CacheTtls.from_settings(settings) == CacheTtls(geocoding=1, current=2, forecast=3)
+
+
+KYIV = Location(id=703448, name="Київ", country_code="UA", latitude=50.45, longitude=30.52)
+
+
+async def test_location_id_is_looked_up_and_cached_per_language() -> None:
+    geocoding = FakeGeocoding([], by_id={703448: KYIV})
+    cache = InMemoryCache()
+    service = WeatherService(geocoding, FakeWeather(), cache=cache)
+
+    result = await service.get_current(location_id=703448, language=Language.UK)
+    await service.get_current(location_id=703448, language=Language.UK)
+
+    assert result.location == KYIV
+    assert geocoding.calls == [{"id": 703448, "language": Language.UK}]  # 2nd call: cache
+    assert Location.model_validate_json(cache.values["place:703448:uk"]) == KYIV
+
+
+async def test_unknown_location_id_raises() -> None:
+    service = WeatherService(FakeGeocoding([]), FakeWeather())
+
+    with pytest.raises(LocationNotFoundError, match="id 42"):
+        await service.get_forecast(location_id=42)
+
+
+async def test_city_or_location_id_is_required() -> None:
+    service = WeatherService(FakeGeocoding([PRAGUE]), FakeWeather())
+
+    with pytest.raises(ValueError, match="either city or location_id"):
+        await service.get_current()
+
+
+async def test_texts_are_translated_but_weather_is_cached_once_for_all_languages() -> None:
+    weather = FakeWeather()
+    service = WeatherService(FakeGeocoding([PRAGUE]), weather, cache=InMemoryCache())
+
+    english = await service.get_current("Prague")
+    czech = await service.get_current("Prague", language=Language.CS)
+    forecast = await service.get_forecast("Prague", language=Language.RU, days=1)
+
+    assert (english.current.description, english.units.wind_speed) == ("Clear sky", "km/h")
+    assert (czech.current.description, czech.cached) == ("Jasno", True)
+    assert forecast.daily[0].description == "Пасмурно"
+    assert forecast.units.wind_speed == "км/ч"
+    assert [call["method"] for call in weather.calls] == ["current", "daily"]
+
+
+async def test_forecast_day_without_code_has_no_description() -> None:
+    class NoCodeWeather(FakeWeather):
+        async def get_daily_forecast(
+            self, latitude: float, longitude: float, *, days: int = 7, units: Units = Units.METRIC
+        ) -> list[DailyForecastDay]:
+            return [DAY.model_copy(update={"weather_code": None, "description": None})]
+
+    service = WeatherService(FakeGeocoding([PRAGUE]), NoCodeWeather())
+
+    result = await service.get_forecast("Prague", language=Language.UK)
+
+    assert result.daily[0].description is None

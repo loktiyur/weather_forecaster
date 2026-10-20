@@ -3,6 +3,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from app.schemas.language import Language
 from app.schemas.location import Location
 
 
@@ -40,10 +41,14 @@ class UnitLabels(BaseModel):
     wind_speed: str = Field(examples=["km/h"])
 
     @classmethod
-    def for_units(cls, units: Units) -> "UnitLabels":
+    def for_units(cls, units: Units, language: Language = Language.EN) -> "UnitLabels":
         if units is Units.IMPERIAL:
-            return cls(temperature="°F", wind_speed="mph")
-        return cls(temperature="°C", wind_speed="km/h")
+            return cls(temperature="°F", wind_speed=_MPH.get(language, "mph"))
+        return cls(temperature="°C", wind_speed=_KMH.get(language, "km/h"))
+
+
+_KMH = {Language.UK: "км/год", Language.RU: "км/ч"}
+_MPH = {Language.UK: "миль/год", Language.RU: "миль/ч"}
 
 
 class CurrentWeatherResponse(BaseModel):

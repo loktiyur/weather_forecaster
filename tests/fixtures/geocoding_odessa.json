@@ -1,0 +1,94 @@
+{
+  "results": [
+    {
+      "name": "Odesa",
+      "latitude": 46.48572,
+      "longitude": 30.74383,
+      "feature_code": "PPLA",
+      "country_code": "UA",
+      "country": "Ukraine",
+      "admin1": "Odesa",
+      "timezone": "Europe/Kyiv"
+    },
+    {
+      "name": "Odessa",
+      "latitude": 31.84568,
+      "longitude": -102.36764,
+      "feature_code": "PPLA2",
+      "country_code": "US",
+      "country": "United States",
+      "admin1": "Texas",
+      "timezone": "America/Chicago"
+    },
+    {
+      "name": "Odessa",
+      "latitude": 38.99917,
+      "longitude": -93.95356,
+      "feature_code": "PPL",
+      "country_code": "US",
+      "country": "United States",
+      "admin1": "Missouri",
+      "timezone": "America/Chicago"
+    },
+    {
+      "name": "Odessa",
+      "latitude": 47.3332,
+      "longitude": -118.69083,
+      "feature_code": "PPL",
+      "country_code": "US",
+      "country": "United States",
+      "admin1": "Washington",
+      "timezone": "America/Los_Angeles"
+    },
+    {
+      "name": "Odessa",
+      "latitude": 42.33674,
+      "longitude": -76.78857,
+      "feature_code": "PPL",
+      "country_code": "US",
+      "country": "United States",
+      "admin1": "New York",
+      "timezone": "America/New_York"
+    },
+    {
+      "name": "Odessa",
+      "latitude": 39.45733,
+      "longitude": -75.66132,
+      "feature_code": "PPL",
+      "country_code": "US",
+      "country": "United States",
+      "admin1": "Delaware",
+      "timezone": "America/New_York"
+    },
+    {
+      "name": "Odessa",
+      "latitude": 40.70168,
+      "longitude": -99.25676,
+      "feature_code": "PPL",
+      "country_code": "US",
+      "country": "United States",
+      "admin1": "Nebraska",
+      "timezone": "America/Chicago"
+    },
+    {
+      "name": "Odessa",
+      "latitude": 45.25969,
+      "longitude": -96.32894,
+      "feature_code": "PPL",
+      "country_code": "US",
+      "country": "United States",
+      "admin1": "Minnesota",
+      "timezone": "America/Chicago"
+    },
+    {
+      "name": "Odessa Dam",
+      "latitude": 38.97167,
+      "longitude": -93.99022,
+      "feature_code": "DAM",
+      "country_code": "US",
+      "country": "United States",
+      "admin1": "Missouri",
+      "timezone": "America/Chicago"
+    }
+  ]
+}
