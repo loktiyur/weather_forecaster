@@ -9,6 +9,9 @@ from app.cache import keys
 from app.cache.base import Cache, CacheUnavailableError
 from app.clients.base import GeocodingClient, WeatherClient
 from app.config import Settings
+from app.core.exceptions import LocationNotFoundError
+from app.core.weather_codes import describe_weather_code
+from app.schemas.language import Language
 from app.schemas.location import Location
 from app.schemas.weather import (
     CurrentWeather,
@@ -68,28 +71,45 @@ class WeatherService:
         self.ttls = ttls or CacheTtls()
 
     async def get_current(
-        self, city: str, *, country_code: str | None = None, units: Units = Units.METRIC
+        self,
+        city: str | None = None,
+        *,
+        location_id: int | None = None,
+        country_code: str | None = None,
+        region: str | None = None,
+        language: Language = Language.EN,
+        units: Units = Units.METRIC,
     ) -> CurrentWeatherResponse:
-        location = await self._geocode(city, country_code)
+        location = await self._locate(city, location_id, country_code, region, language)
         current, cached = await self._cached(
             keys.current_weather_key(location.latitude, location.longitude, units),
             self.ttls.current,
             _current_adapter,
             lambda: self._weather.get_current(location.latitude, location.longitude, units=units),
         )
+        # The cached weather has no language; only the text shown to people is translated.
+        current = current.model_copy(
+            update={"description": describe_weather_code(current.weather_code, language)}
+        )
         return CurrentWeatherResponse(
-            location=location, current=current, units=UnitLabels.for_units(units), cached=cached
+            location=location,
+            current=current,
+            units=UnitLabels.for_units(units, language),
+            cached=cached,
         )
 
     async def get_forecast(
         self,
-        city: str,
+        city: str | None = None,
         *,
+        location_id: int | None = None,
         country_code: str | None = None,
+        region: str | None = None,
+        language: Language = Language.EN,
         days: int = 7,
         units: Units = Units.METRIC,
     ) -> ForecastResponse:
-        location = await self._geocode(city, country_code)
+        location = await self._locate(city, location_id, country_code, region, language)
         daily, cached = await self._cached(
             keys.forecast_key(location.latitude, location.longitude, days, units),
             self.ttls.forecast,
@@ -98,21 +118,72 @@ class WeatherService:
                 location.latitude, location.longitude, days=days, units=units
             ),
         )
+        daily = [
+            day.model_copy(
+                update={
+                    "description": None
+                    if day.weather_code is None
+                    else describe_weather_code(day.weather_code, language)
+                }
+            )
+            for day in daily
+        ]
         return ForecastResponse(
-            location=location, daily=daily, units=UnitLabels.for_units(units), cached=cached
+            location=location,
+            daily=daily,
+            units=UnitLabels.for_units(units, language),
+            cached=cached,
         )
 
     async def search_locations(
-        self, query: str, *, limit: int = 5, country_code: str | None = None
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        country_code: str | None = None,
+        language: Language = Language.EN,
     ) -> list[Location]:
-        return await self._geocoding.search(query, count=limit, country_code=country_code)
+        return await self._geocoding.search(
+            query, count=limit, country_code=country_code, language=language
+        )
 
-    async def _geocode(self, city: str, country_code: str | None) -> Location:
+    async def _locate(
+        self,
+        city: str | None,
+        location_id: int | None,
+        country_code: str | None,
+        region: str | None,
+        language: Language,
+    ) -> Location:
+        """The place to show: by id when given (exact, any language), otherwise by name."""
+        if location_id is not None:
+            return await self._place(location_id, language)
+        if city is None:
+            raise ValueError("either city or location_id is required")
+        return await self._geocode(city, country_code, region, language)
+
+    async def _geocode(
+        self, city: str, country_code: str | None, region: str | None, language: Language
+    ) -> Location:
         location, _ = await self._cached(
-            keys.geocoding_key(city, country_code),
+            keys.geocoding_key(city, country_code, region, language),
             self.ttls.geocoding,
             _location_adapter,
-            lambda: self._geocoding.geocode(city, country_code=country_code),
+            lambda: self._geocoding.geocode(
+                city, country_code=country_code, region=region, language=language
+            ),
+        )
+        return location
+
+    async def _place(self, location_id: int, language: Language) -> Location:
+        async def load() -> Location:
+            place = await self._geocoding.get(location_id, language=language)
+            if place is None:
+                raise LocationNotFoundError(location_id)
+            return place
+
+        location, _ = await self._cached(
+            keys.place_key(location_id, language), self.ttls.geocoding, _location_adapter, load
         )
         return location
 

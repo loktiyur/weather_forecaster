@@ -46,6 +46,11 @@ select = [
     "RUF",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# Translations: Cyrillic letters that look like Latin ones ("с") are intended there.
+"app/core/weather_codes.py" = ["RUF001"]
+"tests/**" = ["RUF001"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
@@ -92,4 +97,9 @@ test-unit = { cmd = "pytest -m 'not integration'", help = "Unit + API tests, no 
 test-integration = { cmd = "pytest -m integration", help = "Tests against real Redis (docker compose up -d redis-test)" }
 test-cov = { cmd = "pytest -v --cov", help = "Run all tests with the 80 % coverage gate" }
 check = { sequence = ["lint", "format-check", "typecheck", "test-cov"], help = "Everything CI runs" }
-smoke-test = { cmd = "bash scripts/smoke_test.sh", help = "Smoke-test a running API (default http://localhost:8000), e.g. after docker compose --profile full up" }
+smoke-test = { cmd = "bash scripts/smoke_test.sh", help = "Smoke-test a running stack: poe smoke-test [API_URL] [WEB_URL], e.g. after docker compose --profile full up" }
+export-openapi = { cmd = "python scripts/export_openapi.py frontend/openapi.json", env = { PYTHONPATH = "." }, help = "Write the API's OpenAPI schema to frontend/openapi.json" }
+generate-api = { sequence = [
+    "export-openapi",
+    { cmd = "npm --prefix frontend run generate:api" },
+], help = "Regenerate the frontend's API types from the backend (run after changing API models)" }

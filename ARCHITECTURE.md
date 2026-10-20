@@ -55,7 +55,7 @@ Widely used, well-maintained tools with a clear job each; the reason for every c
 | Validation | **Pydantic v2**, **pydantic-settings** | Request/response models, typed settings from env vars | v1.0 |
 | HTTP client | **httpx** (`AsyncClient`) | Async, timeouts, connection pooling, easy to mock | v1.0 |
 | Weather data | **Open-Meteo** Forecast + Geocoding APIs | Free, no API key | v1.0 |
-| Alternative geocoder | **GeoNames** via `geopy` | Kept from the prototype; sync library run in a worker thread | v1.0 |
+| Alternative geocoder | **GeoNames** via `geopy` | Kept from the prototype; sync library run in a worker thread. geopy's client has no language option and no lookup by id: names come in English, `id` requests answer `501` | v1.0 |
 | Cache | **Redis 7** + `redis.asyncio` | TTL cache, shared between processes | v1.0 |
 | Retries | **tenacity** | Backoff for transient upstream errors | v1.0 (Phase 6) |
 | Logging | **structlog** | Structured logs with a request id | v1.0 (Phase 6) |
@@ -71,6 +71,7 @@ Widely used, well-maintained tools with a clear job each; the reason for every c
 | Framework | **Vue 3** (Composition API) + **TypeScript** (strict) | Component-based, typed; fits interactive pages like the trip editor |
 | Build / dev server | **Vite** | Fast dev server with an `/api` proxy, small production builds |
 | Routing / state | **Vue Router**, **Pinia** (from v2.0, for the logged-in user) | Standard Vue tooling |
+| Languages | **vue-i18n** (Composition API) | The standard Vue i18n library: messages per language, plural rules, typed message keys |
 | API client | **openapi-typescript** + **openapi-fetch** | Types generated from the backend's OpenAPI schema: the contract is checked at compile time |
 | Quality | **ESLint**, **Prettier**, **vue-tsc**, **Vitest** + Vue Test Utils | Lint, type check, component tests |
 | Serving | **nginx** (in the `web` image) | Serves the built files, proxies `/api` to the backend |
@@ -302,13 +303,13 @@ sequenceDiagram
     R->>R: validate query (Pydantic)
     R->>S: get_current("Prague")
 
-    S->>C: GET geo:prague:
+    S->>C: GET geo:en:prague:
     alt cache hit
         C-->>S: Location
     else cache miss
-        S->>G: GET /v1/search?name=Prague&count=1
+        S->>G: GET /v1/search?name=Prague&count=100
         G-->>S: results[0]
-        S->>C: SET geo:prague: EX 604800
+        S->>C: SET geo:en:prague: EX 604800
     end
 
     S->>C: GET weather:current:50.09:14.42:metric
@@ -362,11 +363,12 @@ Stops more than 16 days ahead (the Open-Meteo forecast limit) get `"forecast ava
 
 | Key | Value | TTL |
 |-----|-------|-----|
-| `geo:{normalized_city}:{country}` | `Location` JSON | 7 days (places don't move) |
+| `geo:{lang}:{normalized_city}:{country}[:{region}]` | `Location` JSON, names in `lang` | 7 days (places don't move) |
+| `place:{id}:{lang}` | `Location` JSON (lookup by id) | 7 days |
 | `weather:current:{lat:.2f}:{lon:.2f}:{units}` | `CurrentWeather` JSON | 10 min (Open-Meteo updates ~15 min) |
 | `weather:forecast:{lat:.2f}:{lon:.2f}:{days}:{units}` | `list[DailyForecastDay]` JSON | 1 hour |
 
-Coordinates are rounded to 2 decimals (~1 km) so nearby requests share an entry. City names are lower-cased and trimmed (`"  Prague "` and `"prague"` share `geo:prague:`).
+Coordinates are rounded to 2 decimals (~1 km) so nearby requests share an entry. City names are lower-cased and trimmed (`"  Prague "` and `"prague"` share `geo:en:prague:`). Weather entries have no language: descriptions and unit labels are translated when the response is built, so all four languages share one cached forecast.
 
 - **Cache-aside** in `WeatherService`: read the key → on a miss call the provider → store the result with its TTL. Values are Pydantic models serialised to JSON; an entry that no longer matches the model is treated as a miss. Errors such as `CityNotFoundError` are not cached.
 - **Redis is optional at runtime.** Any cache error is logged and treated as a miss. `/health/ready` reports it with `503`.
@@ -465,22 +467,37 @@ A **separate application in the same repository** (`frontend/`), not part of the
 
 ```
 frontend/
+├── openapi.json             # the backend's OpenAPI schema (exported by scripts/export_openapi.py)
 ├── src/
 │   ├── api/
-│   │   ├── schema.d.ts      # GENERATED from the backend's /openapi.json, never edited by hand
-│   │   └── client.ts        # typed openapi-fetch client
-│   ├── pages/               # v1: Search · v2: Login, Dashboard, Trips, Trip, Stats, Preferences
-│   ├── components/          # WeatherCard, ForecastList, PlacePicker, UnitsToggle, ErrorBanner, …
+│   │   ├── schema.d.ts      # GENERATED from openapi.json, never edited by hand
+│   │   └── client.ts        # typed openapi-fetch client; failures become ApiError(code)
+│   ├── pages/               # v1: SearchPage, PlacesPage · v2: Login, Dashboard, Trips, Trip, Stats, Preferences
+│   ├── components/          # CurrentWeatherCard, ForecastList, SearchForm, UnitsToggle, LanguageSelect, ErrorBanner
+│   ├── composables/         # useWeatherLookup (parallel requests, stale-answer guard), useUnits
+│   ├── weather/             # display helpers (icons, local times, dates), place links
+│   ├── i18n/                # vue-i18n setup, plural rules, language detection; locales/{en,uk,cs,ru}.json
 │   ├── stores/              # v2: Pinia store for the logged-in user and preferences
 │   └── router.ts
-├── tests/                   # Vitest component tests
-├── Dockerfile               # Node build stage → nginx runtime stage
-├── nginx.conf               # serve the app, proxy /api to the api service
+├── tests/                   # Vitest: client, helpers, i18n (keys, plurals), the pages
+├── Dockerfile               # Node build stage → unprivileged nginx runtime stage
+├── nginx.conf               # serve the app, proxy /api, /health, /docs to the api service
 ├── vite.config.ts           # dev proxy /api → http://localhost:8000
 └── package.json
 ```
 
-**The API is the contract.** The TypeScript types are generated from the OpenAPI schema FastAPI produces. When a Pydantic model changes, the frontend type check shows every place that must follow, and CI fails if the generated types are out of date. The backend and the frontend cannot drift apart unnoticed.
+**The API is the contract.** The TypeScript types are generated from the OpenAPI schema FastAPI produces (`poe generate-api`). When a Pydantic model changes, the frontend type check shows every place that must follow, and CI regenerates the types from the backend code and fails if they differ from the committed ones. The backend and the frontend cannot drift apart unnoticed.
+
+**The URL holds the search** (`/?city=Prague`, or `/?id=4401659&city=Odessa` for one exact place), so results can be bookmarked and shared and the back button works. Current weather, forecast and the number of other matching places are requested in parallel; only the newest search may update the page.
+
+**Places, not countries (v1.0):** the geocoder also returns countries, dams, parks and airports. Providers keep only populated places. When the best match is a country ("Germany"), the weather endpoints answer `404 NOT_A_CITY`: the weather at a country's centre point says nothing about the country, and the next match is often a town that only shares an old name (Germany → Camp Dennison, Ohio). The page explains this and links to the towns that are really called Germany. `GeocodingClient.find()` is the one method a provider implements: it returns the populated places and the country the name means, if any; `search()` and `geocode()` are built on it.
+
+**Ambiguous names (v1.0):** when the name matches other places, the page links to `/places?q=…`, which lists up to 20 matches. Each entry links to the place's **id**: `location.id` is the GeoNames id, stable and the same in every language, and the weather endpoints accept it as `id`. A link therefore still opens the same place after the language is switched, and even two places with the same name in the same region (Paris, Ohio, twice) are told apart. API clients without an id can still use name + country + `region`.
+
+**Languages (v1.0):** the interface speaks English, Ukrainian, Czech and Russian.
+- The frontend uses **vue-i18n**. Messages live in `src/i18n/locales/{en,uk,cs,ru}.json`; `en.json` defines their type, so a key missing in another language fails `vue-tsc`, and a test compares the key sets. Plural forms follow each language (1 місце, 2 місця, 5 місць). The choice is remembered in `localStorage`; the first default is the browser's language.
+- Every API call sends `lang`. The backend returns place names, weather descriptions (`app/core/weather_codes.py`, one tuple of four texts per code, so mypy rejects a missing language) and unit labels (`км/год`) in that language. Error messages stay English: they are for developers, and the frontend shows its own text per error code.
+- **Names in any alphabet.** The geocoder matches a name only in the search language: "Київ" with `language=en` finds nothing, "Киев" with `language=uk` finds a village in Russia, and "Germany" with `language=ru` misses the country. So a result counts only when its best match is exactly the typed name; otherwise the name is retried in the other languages of the same alphabet (Ukrainian and Russian for Cyrillic, English and Czech for Latin). Places found that way are fetched again by id in the interface language, so typing "Київ" with an English interface shows "Kyiv, Ukraine". This logic lives in the `GeocodingClient` base class, so every provider gets it.
 
 | | Development | Full stack / production |
 |---|---|---|
@@ -500,9 +517,9 @@ Base path `/api/v1`. Interactive docs at `/docs` (Swagger) and `/redoc`.
 
 | Method | Path | Query params | Description |
 |--------|------|-------------|-------------|
-| `GET` | `/api/v1/weather/current` | `city` (1–100 chars, required), `country` (ISO-2), `units` (`metric` \| `imperial`) | Current weather |
+| `GET` | `/api/v1/weather/current` | `city` (1–100 chars with a letter) **or** `id` (a `location.id`: exactly that place), `country` (ISO-2), `region` (picks one of several same-name places in a country), `lang` (`en` \| `uk` \| `cs` \| `ru`), `units` (`metric` \| `imperial`) | Current weather |
 | `GET` | `/api/v1/weather/forecast` | same + `days` (1–16, default 7) | Daily forecast |
-| `GET` | `/api/v1/locations/search` | `q`, `country`, `limit` (1–10, default 5) | Candidate places for an ambiguous name; `{"results": [...]}` |
+| `GET` | `/api/v1/locations/search` | `q`, `country`, `lang`, `limit` (1–20, default 5) | Candidate places for an ambiguous name, populated places only; `{"results": [...]}` |
 | `GET` | `/health` | — | Liveness |
 | `GET` | `/health/ready` | — | Readiness: Redis (and Postgres in v2.0) reachable, `503` otherwise |
 
@@ -522,6 +539,7 @@ Base path `/api/v1`. Interactive docs at `/docs` (Swagger) and `/redoc`.
 ```json
 {
   "location": {
+    "id": 3067696,
     "name": "Prague",
     "country": "Czechia",
     "country_code": "CZ",
@@ -545,7 +563,7 @@ Base path `/api/v1`. Interactive docs at `/docs` (Swagger) and `/redoc`.
 }
 ```
 
-From v2.0 `location` also contains its stable `id`.
+`location.id` is the GeoNames id; from v2.0 it is also the key of the stored place (`weather.locations`).
 
 ### Error format
 
@@ -574,6 +592,9 @@ Validation errors also list every invalid field:
 | Invalid parameter | `RequestValidationError` | `422` |
 | Unknown URL / wrong method | Starlette `HTTPException` | `404` / `405` |
 | No place found | `CityNotFoundError` | `404` |
+| The name is a country ("Germany") | `NotACityError` | `404` (`NOT_A_CITY`) |
+| No populated place has this `id` | `LocationNotFoundError` | `404` (`LOCATION_NOT_FOUND`) |
+| The provider cannot do it (GeoNames: lookup by `id`) | `NotSupportedError` | `501` (`NOT_SUPPORTED`) |
 | Upstream 4xx/5xx or bad JSON | `UpstreamServiceError` (detail logged, generic message returned) | `502` |
 | Upstream timeout | `UpstreamTimeoutError` | `504` |
 | Not logged in (v2.0) | — | `401` |
@@ -596,7 +617,9 @@ weather_forecaster/
 │   └── integration/              # real Redis (redis-test); fail if Docker is down
 ├── frontend/                     # Vue app (layout in §9)
 ├── .github/workflows/ci.yml
-├── scripts/smoke_test.sh         # end-to-end check of a running stack (CI + poe smoke-test)
+├── scripts/
+│   ├── smoke_test.sh             # end-to-end check of a running stack (CI + poe smoke-test)
+│   └── export_openapi.py         # writes the API contract for the frontend (poe generate-api)
 ├── Dockerfile                    # api image
 ├── .dockerignore
 ├── docker-compose.yml            # redis, redis-test; profile full: api, web
@@ -668,7 +691,7 @@ All jobs run on every pull request and are required checks in the `main` ruleset
 | `Lint, type-check, test` | ruff, format check, mypy strict, unit + API tests · `Architecture` step (import-linter) from Phase 7 | Phase 0 |
 | `Redis integration` | `redis:7.4-alpine` service container, integration tests | Phase 3 |
 | `Docker image` | build the `api` (and `web` from Phase 5) images, start the `full` profile, run `scripts/smoke_test.sh`: readiness, a real weather request, the cache hit, the error format (and the web page from Phase 5) | Phase 4 |
-| `Frontend` | `npm ci`, lint, `vue-tsc`, Vitest, build, generated API types up to date | Phase 5 |
+| `Frontend` | generated API types match the backend code, ESLint, Prettier, `vue-tsc`, Vitest, build | Phase 5 |
 | `Postgres integration` | `postgres:16-alpine` service container, `alembic upgrade head`, `alembic check`, Postgres integration tests | Phase 8 |
 | `Coverage` | merges coverage from the test jobs, applies the 80 % gate (until Phase 8 the gate runs in `Redis integration`) | Phase 8 |
 | Release (on tag `v*`) | push the `api` and `web` images to GitHub Container Registry | Phase 6 |

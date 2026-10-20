@@ -9,7 +9,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.exceptions import CityNotFoundError, UpstreamServiceError, UpstreamTimeoutError
+from app.core.exceptions import (
+    CityNotFoundError,
+    LocationNotFoundError,
+    NotACityError,
+    NotSupportedError,
+    UpstreamServiceError,
+    UpstreamTimeoutError,
+)
 from app.schemas.errors import ErrorBody, ErrorResponse, FieldError
 
 logger = logging.getLogger(__name__)
@@ -38,6 +45,21 @@ def error_response(
 async def _city_not_found(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, CityNotFoundError)
     return error_response(status.HTTP_404_NOT_FOUND, "CITY_NOT_FOUND", str(exc))
+
+
+async def _not_a_city(_: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, NotACityError)
+    return error_response(status.HTTP_404_NOT_FOUND, "NOT_A_CITY", str(exc))
+
+
+async def _location_not_found(_: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, LocationNotFoundError)
+    return error_response(status.HTTP_404_NOT_FOUND, "LOCATION_NOT_FOUND", str(exc))
+
+
+async def _not_supported(_: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, NotSupportedError)
+    return error_response(status.HTTP_501_NOT_IMPLEMENTED, "NOT_SUPPORTED", str(exc))
 
 
 async def _upstream_error(_: Request, exc: Exception) -> JSONResponse:
@@ -93,6 +115,9 @@ def _field_error(error: Any) -> FieldError:
 
 def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(CityNotFoundError, _city_not_found)
+    app.add_exception_handler(NotACityError, _not_a_city)
+    app.add_exception_handler(LocationNotFoundError, _location_not_found)
+    app.add_exception_handler(NotSupportedError, _not_supported)
     app.add_exception_handler(UpstreamTimeoutError, _upstream_timeout)
     app.add_exception_handler(UpstreamServiceError, _upstream_error)
     app.add_exception_handler(RequestValidationError, _validation_error)
@@ -102,8 +127,10 @@ def register_exception_handlers(app: FastAPI) -> None:
 def error_docs(*statuses: int) -> dict[int | str, dict[str, Any]]:
     """`responses=` entries for OpenAPI, so /docs shows the error format per endpoint."""
     descriptions = {
-        404: "No place found for the given name",
+        404: "No place found for the name (`CITY_NOT_FOUND`) or the id "
+        "(`LOCATION_NOT_FOUND`), or the name is a country (`NOT_A_CITY`)",
         422: "Invalid query parameters",
+        501: "The configured geocoding provider cannot do this, e.g. look places up by id",
         502: "The upstream weather/geocoding provider failed",
         504: "The upstream provider did not respond in time",
     }

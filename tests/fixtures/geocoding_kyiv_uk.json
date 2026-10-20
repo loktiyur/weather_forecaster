@@ -1,0 +1,26 @@
+{
+  "results": [
+    {
+      "id": 703448,
+      "name": "Київ",
+      "latitude": 50.45466,
+      "longitude": 30.5238,
+      "feature_code": "PPLC",
+      "country_code": "UA",
+      "country": "Україна",
+      "admin1": "Місто Київ",
+      "timezone": "Europe/Kyiv"
+    },
+    {
+      "id": 704213,
+      "name": "Київ",
+      "latitude": 47.86401,
+      "longitude": 31.02245,
+      "feature_code": "PPL",
+      "country_code": "UA",
+      "country": "Україна",
+      "admin1": "Миколаївська область",
+      "timezone": "Europe/Kyiv"
+    }
+  ]
+}

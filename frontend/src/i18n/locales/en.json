@@ -1,0 +1,51 @@
+{
+  "app": {
+    "title": "Weather Forecaster",
+    "language": "Language",
+    "attribution": "Weather data by {source} (CC BY 4.0)"
+  },
+  "search": {
+    "label": "City",
+    "placeholder": "Search a city, e.g. Prague",
+    "submit": "Search",
+    "needsLetter": "Enter a city name. Postal codes and numbers are not supported.",
+    "idle": "Type a city to see the current weather and a 7-day forecast.",
+    "loading": "Loading weather"
+  },
+  "units": {
+    "label": "Units",
+    "metric": "Metric: °C, km/h",
+    "imperial": "Imperial: °F, mph"
+  },
+  "weather": {
+    "localTime": "Local time {time}",
+    "cached": "cached",
+    "cachedTitle": "Served from the cache",
+    "feelsLike": "Feels like",
+    "humidity": "Humidity",
+    "wind": "Wind",
+    "forecastTitle": "{n}-day forecast | {n}-day forecast"
+  },
+  "places": {
+    "notMeant": "Not the place you meant?",
+    "seeOther": "See {n} other place matching “{name}” | See {n} other places matching “{name}”",
+    "seeAll": "See all places matching “{name}”",
+    "title": "Places matching “{name}”",
+    "back": "← Back to the weather",
+    "loading": "Loading places",
+    "none": "No places match “{name}”. Check the spelling.",
+    "cutOff": "Showing the first {n} matches. Add the full name to narrow the list."
+  },
+  "errors": {
+    "cityNotFound": "We couldn’t find “{city}”. Check the spelling or try a nearby larger city.",
+    "notACity": "“{city}” is a country, not a city. Enter a city in it, e.g. its capital.",
+    "placesNamed": "Places named “{city}”",
+    "notACityName": "“{city}” is not a city name. Enter a name, e.g. Prague.",
+    "locationNotFound": "This place could not be found. Search for it by name.",
+    "notSupported": "This server cannot open places from a link. Search for the place by name.",
+    "upstream": "The weather service is not answering right now. Please try again in a moment.",
+    "network": "Cannot reach the server. Check your connection and try again.",
+    "unknown": "Something went wrong. Please try again.",
+    "retry": "Try again"
+  }
+}

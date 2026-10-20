@@ -1,0 +1,1142 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Weather Forecaster",
+    "description": "Current weather and daily forecast for a city.",
+    "version": "0.3.0"
+  },
+  "paths": {
+    "/api/v1/weather/current": {
+      "get": {
+        "tags": [
+          "weather"
+        ],
+        "summary": "Current weather for a city",
+        "description": "Resolves the city name to a place and returns its current weather.\n\nThe resolved `location` is part of the response, so the client can show\n*which* place was used for ambiguous names. `country` + `region` select one of\nseveral same-name places; `id` (from `/locations/search`) selects exactly one.",
+        "operationId": "get_current_weather_api_v1_weather_current_get",
+        "parameters": [
+          {
+            "name": "city",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "City name (not a postal code). Required unless `id` is given",
+              "examples": [
+                "Prague"
+              ],
+              "title": "City"
+            },
+            "description": "City name (not a postal code). Required unless `id` is given"
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`location.id` of a place (e.g. from `/locations/search`): selects exactly that place in any language; `city`, `country` and `region` are then ignored",
+              "examples": [
+                3067696
+              ],
+              "title": "Id"
+            },
+            "description": "`location.id` of a place (e.g. from `/locations/search`): selects exactly that place in any language; `city`, `country` and `region` are then ignored"
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z]{2}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO-3166 alpha-2 country code to pick the right place, e.g. `US` for Paris, Texas",
+              "examples": [
+                "CZ"
+              ],
+              "title": "Country"
+            },
+            "description": "ISO-3166 alpha-2 country code to pick the right place, e.g. `US` for Paris, Texas"
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "First-level region (state, province, ...) as returned by `/locations/search`; picks one of several same-name places in a country",
+              "examples": [
+                "Texas"
+              ],
+              "title": "Region"
+            },
+            "description": "First-level region (state, province, ...) as returned by `/locations/search`; picks one of several same-name places in a country"
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Language",
+              "description": "Language of place names, weather descriptions and unit labels",
+              "default": "en"
+            },
+            "description": "Language of place names, weather descriptions and unit labels"
+          },
+          {
+            "name": "units",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Units",
+              "description": "`metric` (°C, km/h) or `imperial` (°F, mph)",
+              "default": "metric"
+            },
+            "description": "`metric` (°C, km/h) or `imperial` (°F, mph)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentWeatherResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No place found for the name (`CITY_NOT_FOUND`) or the id (`LOCATION_NOT_FOUND`), or the name is a country (`NOT_A_CITY`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The configured geocoding provider cannot do this, e.g. look places up by id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream weather/geocoding provider failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The upstream provider did not respond in time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weather/forecast": {
+      "get": {
+        "tags": [
+          "weather"
+        ],
+        "summary": "Daily forecast for a city",
+        "description": "Daily min/max temperature, humidity, sunrise and sunset for 1 to 16 days, starting today.",
+        "operationId": "get_forecast_api_v1_weather_forecast_get",
+        "parameters": [
+          {
+            "name": "city",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "City name (not a postal code). Required unless `id` is given",
+              "examples": [
+                "Prague"
+              ],
+              "title": "City"
+            },
+            "description": "City name (not a postal code). Required unless `id` is given"
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`location.id` of a place (e.g. from `/locations/search`): selects exactly that place in any language; `city`, `country` and `region` are then ignored",
+              "examples": [
+                3067696
+              ],
+              "title": "Id"
+            },
+            "description": "`location.id` of a place (e.g. from `/locations/search`): selects exactly that place in any language; `city`, `country` and `region` are then ignored"
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z]{2}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO-3166 alpha-2 country code to pick the right place, e.g. `US` for Paris, Texas",
+              "examples": [
+                "CZ"
+              ],
+              "title": "Country"
+            },
+            "description": "ISO-3166 alpha-2 country code to pick the right place, e.g. `US` for Paris, Texas"
+          },
+          {
+            "name": "region",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "First-level region (state, province, ...) as returned by `/locations/search`; picks one of several same-name places in a country",
+              "examples": [
+                "Texas"
+              ],
+              "title": "Region"
+            },
+            "description": "First-level region (state, province, ...) as returned by `/locations/search`; picks one of several same-name places in a country"
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Language",
+              "description": "Language of place names, weather descriptions and unit labels",
+              "default": "en"
+            },
+            "description": "Language of place names, weather descriptions and unit labels"
+          },
+          {
+            "name": "units",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Units",
+              "description": "`metric` (°C, km/h) or `imperial` (°F, mph)",
+              "default": "metric"
+            },
+            "description": "`metric` (°C, km/h) or `imperial` (°F, mph)"
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 16,
+              "minimum": 1,
+              "description": "Number of days, including today",
+              "default": 7,
+              "title": "Days"
+            },
+            "description": "Number of days, including today"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No place found for the name (`CITY_NOT_FOUND`) or the id (`LOCATION_NOT_FOUND`), or the name is a country (`NOT_A_CITY`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The configured geocoding provider cannot do this, e.g. look places up by id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream weather/geocoding provider failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The upstream provider did not respond in time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/locations/search": {
+      "get": {
+        "tags": [
+          "locations"
+        ],
+        "summary": "Find places matching a name",
+        "description": "Candidates for an ambiguous name (e.g. *Springfield*), best match first.\n\nReturns an empty `results` list, not 404, when nothing matches: an empty\nsearch result is a valid answer.",
+        "operationId": "search_locations_api_v1_locations_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "description": "Place name (not a postal code)",
+              "examples": [
+                "Springfield"
+              ],
+              "title": "Q"
+            },
+            "description": "Place name (not a postal code)"
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[A-Za-z]{2}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO-3166 alpha-2 country code to pick the right place, e.g. `US` for Paris, Texas",
+              "examples": [
+                "CZ"
+              ],
+              "title": "Country"
+            },
+            "description": "ISO-3166 alpha-2 country code to pick the right place, e.g. `US` for Paris, Texas"
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Language",
+              "description": "Language of place names, weather descriptions and unit labels",
+              "default": "en"
+            },
+            "description": "Language of place names, weather descriptions and unit labels"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "description": "Maximum number of results",
+              "default": 5,
+              "title": "Limit"
+            },
+            "description": "Maximum number of results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream weather/geocoding provider failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The upstream provider did not respond in time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Liveness check",
+        "description": "The process is running. Does not look at dependencies.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness check",
+        "description": "Checks the dependencies. `503` if any is down.\n\nThe weather endpoints still work without Redis (just slower), but a load balancer or\nan operator should know the cache is gone.",
+        "operationId": "ready_health_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "A dependency is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CurrentWeather": {
+        "properties": {
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Time",
+            "description": "Local time of the place",
+            "examples": [
+              "2026-10-16T14:15"
+            ]
+          },
+          "temperature": {
+            "type": "number",
+            "title": "Temperature",
+            "examples": [
+              16.0
+            ]
+          },
+          "apparent_temperature": {
+            "type": "number",
+            "title": "Apparent Temperature",
+            "description": "Feels-like temperature",
+            "examples": [
+              15.2
+            ]
+          },
+          "relative_humidity": {
+            "type": "number",
+            "title": "Relative Humidity",
+            "description": "Percent",
+            "examples": [
+              60
+            ]
+          },
+          "wind_speed": {
+            "type": "number",
+            "title": "Wind Speed",
+            "description": "At 10 m above ground",
+            "examples": [
+              2.6
+            ]
+          },
+          "weather_code": {
+            "type": "integer",
+            "title": "Weather Code",
+            "description": "WMO weather interpretation code",
+            "examples": [
+              0
+            ]
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "examples": [
+              "Clear sky"
+            ]
+          },
+          "is_day": {
+            "type": "boolean",
+            "title": "Is Day"
+          }
+        },
+        "type": "object",
+        "required": [
+          "time",
+          "temperature",
+          "apparent_temperature",
+          "relative_humidity",
+          "wind_speed",
+          "weather_code",
+          "description",
+          "is_day"
+        ],
+        "title": "CurrentWeather"
+      },
+      "CurrentWeatherResponse": {
+        "properties": {
+          "location": {
+            "$ref": "#/components/schemas/Location"
+          },
+          "current": {
+            "$ref": "#/components/schemas/CurrentWeather"
+          },
+          "units": {
+            "$ref": "#/components/schemas/UnitLabels"
+          },
+          "cached": {
+            "type": "boolean",
+            "title": "Cached",
+            "description": "True when the weather data came from the cache"
+          }
+        },
+        "type": "object",
+        "required": [
+          "location",
+          "current",
+          "units",
+          "cached"
+        ],
+        "title": "CurrentWeatherResponse"
+      },
+      "DailyForecastDay": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date",
+            "examples": [
+              "2026-10-16"
+            ]
+          },
+          "temperature_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature Max",
+            "examples": [
+              17.3
+            ]
+          },
+          "temperature_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature Min",
+            "examples": [
+              4.9
+            ]
+          },
+          "relative_humidity_mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Humidity Mean",
+            "description": "Percent",
+            "examples": [
+              84
+            ]
+          },
+          "weather_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weather Code",
+            "description": "WMO weather interpretation code",
+            "examples": [
+              45
+            ]
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "examples": [
+              "Fog"
+            ]
+          },
+          "sunrise": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sunrise",
+            "examples": [
+              "2026-10-16T07:25"
+            ]
+          },
+          "sunset": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sunset",
+            "examples": [
+              "2026-10-16T18:09"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "temperature_max",
+          "temperature_min",
+          "relative_humidity_mean",
+          "weather_code",
+          "description",
+          "sunrise",
+          "sunset"
+        ],
+        "title": "DailyForecastDay"
+      },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Stable, machine-readable error code",
+            "examples": [
+              "CITY_NOT_FOUND"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable explanation",
+            "examples": [
+              "No place found."
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/FieldError"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details",
+            "description": "Per-field problems, only for validation errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorBody"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse",
+        "description": "The single error format used by every endpoint."
+      },
+      "FieldError": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field",
+            "examples": [
+              "city"
+            ]
+          },
+          "location": {
+            "type": "string",
+            "title": "Location",
+            "description": "Where the field was sent",
+            "examples": [
+              "query"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "examples": [
+              "String should have at least 1 character"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "location",
+          "message"
+        ],
+        "title": "FieldError"
+      },
+      "ForecastResponse": {
+        "properties": {
+          "location": {
+            "$ref": "#/components/schemas/Location"
+          },
+          "daily": {
+            "items": {
+              "$ref": "#/components/schemas/DailyForecastDay"
+            },
+            "type": "array",
+            "title": "Daily"
+          },
+          "units": {
+            "$ref": "#/components/schemas/UnitLabels"
+          },
+          "cached": {
+            "type": "boolean",
+            "title": "Cached",
+            "description": "True when the weather data came from the cache"
+          }
+        },
+        "type": "object",
+        "required": [
+          "location",
+          "daily",
+          "units",
+          "cached"
+        ],
+        "title": "ForecastResponse"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "HealthResponse"
+      },
+      "Language": {
+        "type": "string",
+        "enum": [
+          "en",
+          "uk",
+          "cs",
+          "ru"
+        ],
+        "title": "Language",
+        "description": "Language of place names, weather descriptions and unit labels in API responses."
+      },
+      "Location": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "GeoNames id: stable and the same in every language. Pass it as `id` to the weather endpoints to get exactly this place",
+            "examples": [
+              3067696
+            ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "examples": [
+              "Prague"
+            ]
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country",
+            "examples": [
+              "Czechia"
+            ]
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country Code",
+            "description": "ISO-3166 alpha-2 code",
+            "examples": [
+              "CZ"
+            ]
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region",
+            "description": "First-level region, e.g. a state",
+            "examples": [
+              "Prague"
+            ]
+          },
+          "latitude": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "examples": [
+              50.08804
+            ]
+          },
+          "longitude": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "examples": [
+              14.42076
+            ]
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone",
+            "examples": [
+              "Europe/Prague"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "latitude",
+          "longitude"
+        ],
+        "title": "Location",
+        "description": "A place resolved from the name the user typed."
+      },
+      "LocationSearchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/Location"
+            },
+            "type": "array",
+            "title": "Results"
+          }
+        },
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "title": "LocationSearchResponse",
+        "description": "Wrapped in an object (not a bare list) so fields can be added without breaking clients."
+      },
+      "ReadinessResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "unavailable"
+            ],
+            "title": "Status"
+          },
+          "checks": {
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "unavailable"
+              ]
+            },
+            "type": "object",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "checks"
+        ],
+        "title": "ReadinessResponse"
+      },
+      "UnitLabels": {
+        "properties": {
+          "temperature": {
+            "type": "string",
+            "title": "Temperature",
+            "examples": [
+              "°C"
+            ]
+          },
+          "wind_speed": {
+            "type": "string",
+            "title": "Wind Speed",
+            "examples": [
+              "km/h"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "temperature",
+          "wind_speed"
+        ],
+        "title": "UnitLabels",
+        "description": "Tells the client how to display the numbers."
+      },
+      "Units": {
+        "type": "string",
+        "enum": [
+          "metric",
+          "imperial"
+        ],
+        "title": "Units"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "weather",
+      "description": "Current weather and daily forecast for a city."
+    },
+    {
+      "name": "locations",
+      "description": "Resolve and disambiguate place names."
+    },
+    {
+      "name": "health",
+      "description": "Service status checks."
+    }
+  ]
+}

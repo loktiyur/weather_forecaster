@@ -30,7 +30,9 @@ async def client(
 ) -> AsyncIterator[AsyncClient]:
     app: FastAPI = create_app(settings)
     service = WeatherService(
-        geocoding=OpenMeteoGeocodingClient(http, settings.open_meteo_geocoding_url),
+        geocoding=OpenMeteoGeocodingClient(
+            http, settings.open_meteo_geocoding_url, settings.open_meteo_place_url
+        ),
         weather=OpenMeteoWeatherClient(http, settings.open_meteo_forecast_url),
         cache=RedisCache(redis_client),
     )
@@ -54,7 +56,7 @@ async def test_second_request_comes_from_redis(
     assert geocoding.call_count == forecast.call_count == 1
 
     assert sorted(await redis_client.keys("*")) == [
-        "geo:prague:",
+        "geo:en:prague:",
         "weather:current:50.09:14.42:metric",
     ]
     assert 0 < await redis_client.ttl("weather:current:50.09:14.42:metric") <= 600

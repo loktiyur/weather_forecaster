@@ -1,0 +1,80 @@
+/* Design tokens: one place for colours and shapes, light and dark. */
+:root {
+  color-scheme: light dark;
+  --bg: #f4f6fa;
+  --surface: #ffffff;
+  --surface-muted: #eef1f6;
+  --border: #d9dee7;
+  --text: #17202e;
+  --text-muted: #5b6678;
+  --accent: #2563eb;
+  --on-accent: #ffffff;
+  --danger-text: #8a1c1c;
+  --danger-bg: #fdecec;
+  --danger-border: #f3c2c2;
+  --radius: 10px;
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 10%);
+  --shadow: 0 1px 3px rgb(16 24 40 / 8%), 0 4px 12px rgb(16 24 40 / 6%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f141c;
+    --surface: #171e29;
+    --surface-muted: #1f2734;
+    --border: #2c3646;
+    --text: #e7ecf3;
+    --text-muted: #9aa6b8;
+    --accent: #5b8cff;
+    --on-accent: #0b1020;
+    --danger-text: #ffc9c9;
+    --danger-bg: #3a1a1d;
+    --danger-border: #6b2a30;
+    --shadow-sm: none;
+    --shadow: none;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
+}
+
+a {
+  color: var(--accent);
+}
+
+.card {
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 4px);
+  box-shadow: var(--shadow);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

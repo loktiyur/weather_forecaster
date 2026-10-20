@@ -118,25 +118,38 @@ Branch: `phase-5-frontend`
 A Vue 3 + TypeScript single-page app in `frontend/`, using only the public REST API (ARCHITECTURE.md §9).
 
 **Setup**
-- [ ] `frontend/` with Vite, Vue 3, TypeScript (strict), Vue Router, ESLint + Prettier, Vitest + Vue Test Utils
-- [ ] API types generated from the backend's `/openapi.json` with `openapi-typescript`; typed calls with `openapi-fetch`
-- [ ] Dev server proxies `/api` to `localhost:8000` (no CORS setup needed)
+- [x] `frontend/` with Vite, Vue 3, TypeScript (strict), Vue Router, ESLint + Prettier, Vitest + Vue Test Utils
+- [x] API types generated from the backend's OpenAPI schema with `openapi-typescript` (`scripts/export_openapi.py` → `frontend/openapi.json` → `src/api/schema.d.ts`, `poe generate-api`); typed calls with `openapi-fetch`, every failure becomes an `ApiError` with the backend's error code
+- [x] Dev server proxies `/api` to `localhost:8000` (no CORS setup needed)
 
 **Pages and components**
-- [ ] Search page: city input → current weather card + daily forecast list
-- [ ] Ambiguous names: place picker using `/locations/search` (shows region + country), optional country filter
-- [ ] Units toggle (metric / imperial), remembered in `localStorage`
-- [ ] Loading, empty and error states mapped from the API error codes (`CITY_NOT_FOUND`, `UPSTREAM_TIMEOUT`, …)
-- [ ] Responsive layout (phone width up to desktop)
+- [x] Search page: city input → current weather card + 7-day forecast list; current weather, forecast and alternatives load in parallel, and a slow answer to an older search can never overwrite a newer one
+- [x] The search lives in the URL (`/?city=Prague&country=CZ`): bookmarkable, shareable, back button works
+- [x] Ambiguous names: "Not the place you meant? See N other places matching …" links to a places page (`/places?q=Odessa`) listing up to 20 matches from `/locations/search`; each entry opens exactly that place
+- [x] Weather endpoints accept an optional `region` (`city=Odessa&country=US&region=Missouri`), so same-name places inside one country can be selected. With a region the name must match exactly, because the geocoder also returns fuzzy matches ("Saint Paris" for "Paris")
+- [x] Location ids: `location.id` is the GeoNames id (stable, the same in every language); the weather endpoints accept `id`, and the places list links by id, so a link survives a language switch and even two places with the same name in the same region (Paris, Ohio, twice) are told apart
+- [x] Postal codes and numbers are not looked up: the geocoder would match them as postcodes (`10001` → New York, `123` → a random postcode prefix). `city` / `q` must contain a letter (API: `422 VALIDATION_ERROR`; the form explains it before sending)
+- [x] Only populated places: the geocoder also returns countries, dams, parks, airports. A country name ("Germany") answers `404 NOT_A_CITY` instead of the weather at the country's centre point or a town that only shares an old name (Germany → Camp Dennison, Ohio); the page explains it and links to the towns really called Germany. Providers implement one method, `GeocodingClient.find()`
+- [x] Units toggle (metric / imperial), remembered in `localStorage`
+
+**Languages:** English, Ukrainian, Czech, Russian
+- [x] `vue-i18n`: messages in `src/i18n/locales/{en,uk,cs,ru}.json`, typed from `en.json` (a missing key fails `vue-tsc`), plural rules per language, dates through `Intl`; `<html lang>` follows the choice
+- [x] Language picker in the header (each language in its own name); remembered in `localStorage`, the browser's language is the first default; switching reloads the page data in the new language
+- [x] API parameter `lang` (`en` / `uk` / `cs` / `ru`) on the weather and search endpoints: place names, weather descriptions and unit labels in that language; place cache entries per language, weather entries shared by all languages
+- [x] Names in any alphabet: without an exact match the name is retried in the other languages of the same alphabet, and places found that way are fetched by id in the interface language (`Київ` with an English interface → Kyiv, Ukraine; `Germany` with a Russian interface → `NOT_A_CITY`)
+- [x] GeoNames provider (geopy) keeps its limits: names in English, lookup by `id` answers `501 NOT_SUPPORTED`
+- [x] Loading, empty and error states mapped from the API error codes (`CITY_NOT_FOUND`, `NOT_A_CITY`, `UPSTREAM_TIMEOUT`, …)
+- [x] Responsive layout (phone width up to desktop), light and dark colour scheme
+- [x] Open-Meteo attribution in the footer (required by its CC BY 4.0 licence)
 
 **Packaging**
-- [ ] Multi-stage `frontend/Dockerfile`: Node builds the static files → nginx serves them and proxies `/api` to the `api` service
-- [ ] `web` service in the `full` profile: `docker compose --profile full up` → open http://localhost:8080
+- [x] Multi-stage `frontend/Dockerfile`: Node builds the static files → unprivileged nginx (non-root) serves them and proxies `/api`, `/health`, `/docs` to the `api` service; hashed assets cached for a year, `index.html` never cached, security headers
+- [x] `web` service in the `full` profile: `docker compose --profile full up` → open http://localhost:8080
 
 **Tests**
-- [ ] Vitest component tests with a mocked API client (search, place picker, error states)
+- [x] Vitest tests: API client (query building, error mapping, network failure), formatting, units storage, place links, i18n (same keys in every language, plural forms, language detection), and both pages through the real router with a mocked API module (search, URL, places list, ids, error messages, retry, units, languages, cached badge, stale responses)
 
-**CI additions:** new job `Frontend`: `npm ci` · lint · type check (`vue-tsc`) · unit tests · build · **generated API types are up to date** (regenerate from the backend's OpenAPI schema and fail on a diff). The `Docker image` job also builds the `web` image and smoke-tests http://localhost:8080. Required check in the ruleset.
+**CI additions:** new job `Frontend`: **generated API types are up to date** (regenerate from the backend code and fail on a diff) · ESLint · Prettier · `vue-tsc` · Vitest · build. The `Docker image` job also builds the `web` image and the smoke test checks http://localhost:8080 (page, deep links, `/api` proxy). Required check in the ruleset.
 
 ---
 
@@ -177,8 +190,8 @@ Branch: `phase-8-postgres`
 - [ ] `db` (dev, port 5432, persistent volume) and `db-test` (port 5433, tmpfs) as `postgres:16-alpine` in `docker-compose.yml`; `api` in the `full` profile depends on `db`
 - [ ] `app/core/db.py`: SQLAlchemy 2.0 async engine + session dependency (`asyncpg`)
 - [ ] Alembic with async support; one schema per service (ARCHITECTURE.md §8); first migration creates schema `weather`
-- [ ] `weather.locations`: places stored once with a stable id, upserted from geocoding results (`INSERT … ON CONFLICT`)
-- [ ] `id` added to `Location` in API responses; `GET /api/v1/locations/{id}`
+- [ ] `weather.locations`: places stored once, keyed by the GeoNames id the API already returns as `location.id` (Phase 5), upserted from geocoding results (`INSERT … ON CONFLICT`)
+- [ ] `GET /api/v1/locations/{id}`; lookups by id are served from the table before asking the provider
 - [ ] `GET /health/ready` also checks Postgres
 - [ ] Migrations run on container start in the `full` profile
 - [ ] Integration tests against `db-test` (fail when it is not running, like Redis); markers `redis` and `postgres` under `integration`

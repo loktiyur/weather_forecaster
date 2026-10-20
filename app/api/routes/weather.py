@@ -19,7 +19,7 @@ def cache_control(max_age_seconds: int) -> str:
     "/current",
     response_model=CurrentWeatherResponse,
     summary="Current weather for a city",
-    responses=error_docs(404, 422, 502, 504),
+    responses=error_docs(404, 422, 501, 502, 504),
 )
 async def get_current_weather(
     query: Annotated[WeatherQuery, Query()], service: WeatherServiceDep, response: Response
@@ -27,9 +27,17 @@ async def get_current_weather(
     """Resolves the city name to a place and returns its current weather.
 
     The resolved `location` is part of the response, so the client can show
-    *which* place was used for ambiguous names.
+    *which* place was used for ambiguous names. `country` + `region` select one of
+    several same-name places; `id` (from `/locations/search`) selects exactly one.
     """
-    result = await service.get_current(query.city, country_code=query.country, units=query.units)
+    result = await service.get_current(
+        query.city,
+        location_id=query.id,
+        country_code=query.country,
+        region=query.region,
+        language=query.lang,
+        units=query.units,
+    )
     response.headers["Cache-Control"] = cache_control(service.ttls.current)
     return result
 
@@ -38,14 +46,20 @@ async def get_current_weather(
     "/forecast",
     response_model=ForecastResponse,
     summary="Daily forecast for a city",
-    responses=error_docs(404, 422, 502, 504),
+    responses=error_docs(404, 422, 501, 502, 504),
 )
 async def get_forecast(
     query: Annotated[ForecastQuery, Query()], service: WeatherServiceDep, response: Response
 ) -> ForecastResponse:
     """Daily min/max temperature, humidity, sunrise and sunset for 1 to 16 days, starting today."""
     result = await service.get_forecast(
-        query.city, country_code=query.country, days=query.days, units=query.units
+        query.city,
+        location_id=query.id,
+        country_code=query.country,
+        region=query.region,
+        language=query.lang,
+        days=query.days,
+        units=query.units,
     )
     response.headers["Cache-Control"] = cache_control(service.ttls.forecast)
     return result

@@ -5,7 +5,13 @@ import pytest
 from geopy.exc import GeocoderAuthenticationFailure, GeocoderTimedOut
 
 from app.clients.geonames_geocoding import GeoNamesGeocodingClient
-from app.core.exceptions import UpstreamServiceError, UpstreamTimeoutError
+from app.core.exceptions import (
+    NotACityError,
+    NotSupportedError,
+    UpstreamServiceError,
+    UpstreamTimeoutError,
+)
+from app.schemas.language import Language
 
 PRAGUE_RAW = {
     "name": "Prague",
@@ -45,13 +51,13 @@ class FakeGeoNames:
         return self.result
 
 
-async def test_single_result_uses_exactly_one() -> None:
-    fake = FakeGeoNames(result=FakePlace(PRAGUE_RAW))
+async def test_geocode_returns_the_best_match() -> None:
+    fake = FakeGeoNames(result=[FakePlace(PRAGUE_RAW), FakePlace(PRAGUE_OKLAHOMA_RAW)])
     client = GeoNamesGeocodingClient(fake)
 
     location = await client.geocode("Prague", country_code="CZ")
 
-    assert fake.calls == [{"query": "Prague", "exactly_one": True, "country": "CZ"}]
+    assert fake.calls == [{"query": "Prague", "exactly_one": False, "country": "CZ"}]
     assert location.name == "Prague"
     assert location.country == "Czechia"
     assert location.country_code == "CZ"
@@ -70,6 +76,19 @@ async def test_multiple_results_are_limited_to_count() -> None:
 
     assert fake.calls[0]["exactly_one"] is False
     assert [r.country_code for r in results] == ["CZ", "US"]
+
+
+async def test_only_populated_places_are_returned_and_a_country_is_reported() -> None:
+    country = {**PRAGUE_RAW, "name": "Czechia", "fcl": "A", "fcode": "PCLI"}
+    city = {**PRAGUE_RAW, "fcl": "P", "fcode": "PPLC"}
+    client = GeoNamesGeocodingClient(FakeGeoNames(result=[FakePlace(country), FakePlace(city)]))
+
+    found = await client.find("Czechia", count=1, country_code=None, language=Language.EN)
+
+    assert [p.name for p in found.places] == ["Prague"]
+    assert found.country == "Czechia"
+    with pytest.raises(NotACityError):
+        await client.geocode("Czechia")
 
 
 async def test_no_result_returns_empty_list() -> None:
@@ -95,8 +114,27 @@ async def test_service_error_raises_upstream_error() -> None:
 
 
 async def test_malformed_raw_raises_upstream_error() -> None:
-    fake = FakeGeoNames(result=FakePlace({"name": "Prague", "lat": "not-a-number", "lng": "1"}))
+    fake = FakeGeoNames(result=[FakePlace({"name": "Prague", "lat": "not-a-number", "lng": "1"})])
     client = GeoNamesGeocodingClient(fake)
 
     with pytest.raises(UpstreamServiceError, match="unexpected response format"):
         await client.search("Prague", count=1)
+
+
+async def test_ids_come_from_geonames() -> None:
+    client = GeoNamesGeocodingClient(
+        FakeGeoNames(result=[FakePlace({**PRAGUE_RAW, "geonameId": 3067696})])
+    )
+
+    [prague] = await client.search("Prague")
+
+    assert prague.id == 3067696
+
+
+async def test_lookup_by_id_is_not_supported() -> None:
+    client = GeoNamesGeocodingClient(FakeGeoNames())
+
+    with pytest.raises(
+        NotSupportedError, match="GeoNames does not support looking places up by id"
+    ):
+        await client.get(3067696, language=Language.EN)

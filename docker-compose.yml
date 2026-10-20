@@ -2,8 +2,9 @@
 #   docker compose up -d
 #   poetry run uvicorn app.main:app --reload
 #
-# Full stack (the app in a container too):
+# Full stack (API and web frontend in containers too):
 #   docker compose --profile full up -d --build
+#   open http://localhost:8080
 
 services:
   # Cache for local development.
@@ -53,6 +54,19 @@ services:
       REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The web frontend (frontend/Dockerfile): nginx serves the Vue app and proxies /api to `api`.
+  # Only started with the `full` profile. Open http://localhost:8080
+  web:
+    profiles: ["full"]
+    build: ./frontend
+    image: weather-forecaster-web:local
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      api:
         condition: service_healthy
     restart: unless-stopped
 
