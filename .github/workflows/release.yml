@@ -73,6 +73,8 @@ jobs:
       # releases, a note in the release PR suggests deciding about a milestone release.
       - name: Remind about a major release at minor 50
         if: steps.release.outputs.prs_created == 'true'
+        # Only a hint: if it fails, the release PR is still fine, so the job must not turn red.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ steps.release.outputs.pr }}
