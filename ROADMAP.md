@@ -177,8 +177,8 @@ Branch: `phase-6-release`
   A change to `.github/workflows/` runs every job.
 - [x] **Pushes to `main` (every merge) always run all jobs**, whatever changed.
 - [x] **One required check, `CI result`.** It waits for all jobs and fails if any of them failed; skipped jobs count as passed. The ruleset then requires only this check, so a PR that skips jobs is not blocked by checks that never reported, and a new job needs no ruleset change.
-- [x] On tag `v*.*.*` (`release.yml`): check the tag against the versions in the code, build both images, smoke-test them, then push them to GitHub Container Registry (`<version>`, `<major>.<minor>`, `latest`); first CD step
-- [x] Versions from Conventional Commits with **release-please**: `fix:` → patch, `feat:` → minor, `feat!:` / `BREAKING CHANGE:` → major, `Release-As:` for milestones, `chore:` & co. release nothing. Every merge updates one release PR (versions in all five files + `CHANGELOG.md`); merging it creates the tag, which publishes the images. A comment on the release PR at minor 50 suggests deciding about a milestone release
+- [x] On tag `v*.*.*` (`publish.yml`): check the tag against the versions in the code, build both images, smoke-test them, then push them to GitHub Container Registry (`<version>`, `<major>.<minor>`, `latest`); first CD step
+- [x] Versions from Conventional Commits with **release-please**: `fix:` → patch, `feat:` → minor, `feat!:` / `BREAKING CHANGE:` → major, `Release-As:` for milestones, `chore:` & co. release nothing. Every merge updates one release PR (versions in all five files + `CHANGELOG.md`), which merges itself once its checks pass; that creates the tag, which publishes the images. From minor 50 on the release PR waits for a manual merge, with a comment suggesting to decide about a milestone release
 - [x] `PR title` check (`amannn/action-semantic-pull-request`): with squash merging the title is the commit release-please reads
 - [x] `scripts/export_openapi.py` writes whole-number floats like JavaScript (`16`, not `16.0`), so release-please's rewrite of `openapi.json` keeps the "API types up to date" check green
 

@@ -337,7 +337,8 @@ poetry run poe --help            # list all tasks
 | `CI result` | fails if any job failed; skipped jobs count as passed | always |
 
 - **Pull requests** run only the jobs whose files changed: a README fix runs only the lint job,
-  a frontend change skips the Python jobs. A change to `.github/workflows/` runs everything.
+  a frontend change skips the Python jobs. A change to `.github/workflows/ci.yml` runs
+  everything; a change to the other workflows (release, PR title) runs no job.
 - **Pushes to `main`** (every merge) always run every job.
 - **`CI result` is the required check for all of them** in the `main` ruleset. A skipped job
   never reports a status of its own, so requiring each job would block every pull request that
@@ -367,10 +368,12 @@ is silently left out of a release.
    `chore: release X.Y.Z`. It bumps the version in `pyproject.toml`, `app/main.py`,
    `frontend/package.json`, `frontend/package-lock.json` and `frontend/openapi.json`, and adds
    the new section to `CHANGELOG.md`, made from the `feat:` and `fix:` titles since the last
-   release. More merges update the same PR.
-2. **You merge the release PR when you want to ship.** CI runs on it like on any PR.
+   release. A merge that comes before the release PR is merged updates the same PR.
+2. **The release PR merges itself** (auto-merge) as soon as CI and `PR title` pass on it, a
+   few minutes after your merge. So every `feat:` or `fix:` merge becomes a release, and a PR
+   title with the wrong type is released too: there is no step to catch it.
 3. release-please then creates the tag `vX.Y.Z` and a GitHub Release with the changelog.
-4. **The tag publishes the images**: the workflow checks that the tag matches the versions in
+4. **The tag publishes the images** (`.github/workflows/publish.yml`): the workflow checks that the tag matches the versions in
    the code, builds both images, runs the smoke test against them, and only then pushes them to
    GitHub Container Registry:
 
@@ -380,17 +383,19 @@ is silently left out of a release.
 | `ghcr.io/loktiyur/weather-forecaster-web` | `1.4.0`, `1.4`, `latest` |
 
 A major version is never automatic: it means "something works differently now", not "a lot
-was added". When a release PR reaches minor 50, the workflow comments on it as a reminder to
-decide about a milestone release (`Release-As: 2.0.0`).
+was added". From minor 50 on, the release PR is **not** merged automatically: the workflow
+comments on it as a reminder to decide about a milestone release (`Release-As: 2.0.0`), and
+you merge it yourself when you are ready.
 
 ### One-time setup
 
 1. **Squash merging only**: Settings → General → Pull Requests: allow only *squash merging*,
    with *Default commit message: Pull request title and description* (so `Release-As:` and
-   `BREAKING CHANGE:` lines in a description reach the commit).
-2. **A token for release-please.** GitHub starts no workflows for pull requests and tags created
-   with a workflow's own token, so the release PR would get no CI (and could never be merged),
-   and its tag would publish no images. Create a *fine-grained personal access token*
+   `BREAKING CHANGE:` lines in a description reach the commit). On the same page, turn on
+   **Allow auto-merge**, which the release PR uses.
+2. **A token for release-please.** GitHub starts no workflows for pull requests, merges and tags
+   made with a workflow's own token, so the release PR would get no CI (and could never be
+   merged), its merge would create no tag, and the tag would publish no images. Create a *fine-grained personal access token*
    (Settings of your account → Developer settings → Personal access tokens → Fine-grained
    tokens) with access to **this repository only** and the permissions **Contents: read and
    write** and **Pull requests: read and write**. Save it as the repository secret

@@ -5,17 +5,17 @@ name: Release
 #   Release-As: 2.0.0 in a commit body → exactly that version   chore:, docs:, ci:, ... → no release
 #
 # 1. Every push to main: release-please opens or updates the release PR ("chore: release
-#    1.5.0"), which bumps the versions and writes CHANGELOG.md. Nothing is released yet.
-# 2. Merging that PR: release-please creates the tag v1.5.0 and its GitHub Release.
-# 3. The tag starts the `images` job: build, smoke test, push to GitHub Container Registry.
+#    1.5.0"), which bumps the versions and writes CHANGELOG.md, and turns on its auto-merge.
+# 2. Once its checks pass, the PR merges itself; that push to main makes release-please
+#    create the tag v1.5.0 and its GitHub Release. From minor 50 on, you merge it yourself.
+# 3. The tag starts publish.yml: build, smoke test, push to GitHub Container Registry.
 #
-# release-please uses RELEASE_PLEASE_TOKEN, not the job's own token: GitHub starts no
-# workflows for PRs and tags created with GITHUB_TOKEN, so the release PR would get no CI
-# (and could never be merged) and the tag would publish no images.
+# release-please and the auto-merge use RELEASE_PLEASE_TOKEN, not the job's own token:
+# GitHub starts no workflows for PRs, merges and tags made with GITHUB_TOKEN, so the release
+# PR would get no CI, its merge would create no tag and the tag would publish no images.
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]
 
 permissions:
   contents: read
@@ -23,7 +23,6 @@ permissions:
 jobs:
   release-please:
     name: Release PR
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # One run at a time: two runs must not update the release PR together.
     concurrency:
@@ -37,16 +36,17 @@ jobs:
 
       # release-please counts commits from the last release. Until the first one (v1.0.0)
       # exists, there is nothing to count from (README → Releases → First release).
-      - name: Current version is released
+      # Any release will do: right after a release PR is merged, the manifest already holds
+      # the new version, whose release is exactly what release-please is about to create.
+      - name: First release exists
         id: current
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(jq -r '."."' .release-please-manifest.json)
-          if gh release view "v$version" >/dev/null 2>&1; then
+          if [ -n "$(gh release list --limit 1 --json tagName --jq '.[].tagName')" ]; then
             echo "released=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::v$version has no GitHub Release yet; create it first (README → Releases → First release)."
+            echo "::notice::There is no GitHub Release yet; create v1.0.0 first (README → Releases → First release)."
             echo "released=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -69,119 +69,51 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # Majors are for breaking changes and milestones, never automatic. After many feature
-      # releases, a note in the release PR suggests deciding about a milestone release.
-      - name: Remind about a major release at minor 50
+      - name: Release PR version
+        id: pr
         if: steps.release.outputs.prs_created == 'true'
+        env:
+          PR: ${{ steps.release.outputs.pr }}
+        run: |
+          version=$(jq -r '.title' <<< "$PR" | awk '{print $NF}')
+          {
+            echo "number=$(jq -r '.number' <<< "$PR")"
+            echo "version=$version"
+            echo "major=$(cut -d. -f1 <<< "$version")"
+            echo "minor=$(cut -d. -f2 <<< "$version")"
+          } >> "$GITHUB_OUTPUT"
+
+      # GitHub merges the PR (squash, title as the commit) as soon as the required checks pass.
+      # A `chore:` commit, so the merge itself starts no further release. Needs the repository
+      # setting "Allow auto-merge" (README → Releases → One-time setup).
+      - name: Merge the release PR when its checks pass
+        if: steps.pr.outcome == 'success' && fromJSON(steps.pr.outputs.minor) < 50
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          # Already on from an earlier run: release-please updated the same PR.
+          if [ "$(gh pr view "$NUMBER" --json autoMergeRequest --jq '.autoMergeRequest != null')" = "true" ]; then
+            echo "Auto-merge is already on for #$NUMBER."
+          else
+            gh pr merge "$NUMBER" --auto --squash \
+              || { echo "::error::Could not turn on auto-merge. Is 'Allow auto-merge' enabled (README → Releases → One-time setup)?"; exit 1; }
+          fi
+
+      # Majors are for breaking changes and milestones, never automatic. From minor 50 on, the
+      # release PR waits for you, with a note suggesting to decide about a milestone release.
+      - name: Remind about a major release at minor 50
+        if: steps.pr.outcome == 'success' && fromJSON(steps.pr.outputs.minor) >= 50
         # Only a hint: if it fails, the release PR is still fine, so the job must not turn red.
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ steps.release.outputs.pr }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+          VERSION: ${{ steps.pr.outputs.version }}
+          MAJOR: ${{ steps.pr.outputs.major }}
         run: |
-          number=$(jq -r '.number' <<< "$PR")
-          version=$(jq -r '.title' <<< "$PR" | awk '{print $NF}')
-          minor=$(cut -d. -f2 <<< "$version")
           marker="<!-- minor-50-reminder -->"
-          if [ "$minor" -ge 50 ] && ! gh pr view "$number" --json comments --jq '.comments[].body' | grep -qF "$marker"; then
-            gh pr comment "$number" --body "$marker
-          **$version**: this is minor release 50 or later. If enough has changed for a milestone, make the next release a major one: add \`Release-As: $(( $(cut -d. -f1 <<< "$version") + 1 )).0.0\` to the body of a commit (or a squash-merged PR description)."
+          if ! gh pr view "$NUMBER" --json comments --jq '.comments[].body' | grep -qF "$marker"; then
+            gh pr comment "$NUMBER" --body "$marker
+          **$VERSION**: this is minor release 50 or later, so this PR is not merged automatically. If enough has changed for a milestone, make the next release a major one: add \`Release-As: $(( MAJOR + 1 )).0.0\` to the description of a squash-merged PR. Otherwise merge this PR to release $VERSION."
           fi
-
-  images:
-    name: Publish images
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write  # push to GitHub Container Registry with the job's own token
-    steps:
-      - uses: actions/checkout@v4
-
-      # release-please keeps these in step; a hand-made tag might not.
-      - name: Tag matches the versions in the code
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          backend=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          frontend=$(python3 -c "import json; print(json.load(open('frontend/package.json'))['version'])")
-          echo "tag=$tag pyproject.toml=$backend frontend/package.json=$frontend"
-          if [ "$tag" != "$backend" ] || [ "$tag" != "$frontend" ]; then
-            echo "::error::Tag v$tag does not match pyproject.toml ($backend) and frontend/package.json ($frontend)."
-            exit 1
-          fi
-
-      # Registry paths must be lower case; the owner name may not be.
-      - name: Image names
-        id: names
-        run: echo "prefix=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/weather-forecaster" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: API image tags
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ${{ steps.names.outputs.prefix }}-api
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
-      - name: Web image tags
-        id: meta-web
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ${{ steps.names.outputs.prefix }}-web
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
-      # Built and loaded locally first: they are pushed only after the smoke test passed.
-      # The `:local` tags are the names docker-compose.yml uses.
-      - name: Build API image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          load: true
-          tags: |
-            weather-forecaster-api:local
-            ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=api
-
-      - name: Build web image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          load: true
-          tags: |
-            weather-forecaster-web:local
-            ${{ steps.meta-web.outputs.tags }}
-          labels: ${{ steps.meta-web.outputs.labels }}
-          cache-from: type=gha,scope=web
-
-      - name: Start full stack
-        run: docker compose --profile full up --detach --no-build --wait --wait-timeout 90
-
-      - name: Smoke test
-        run: bash scripts/smoke_test.sh http://localhost:8000 http://localhost:8080
-
-      - name: Container logs
-        if: failure()
-        run: docker compose --profile full logs
-
-      - name: Shut down
-        if: always()
-        run: docker compose --profile full down --volumes
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Push images
-        run: |
-          docker push --all-tags "${{ steps.names.outputs.prefix }}-api"
-          docker push --all-tags "${{ steps.names.outputs.prefix }}-web"

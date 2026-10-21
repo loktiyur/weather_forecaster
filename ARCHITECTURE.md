@@ -706,8 +706,8 @@ Pull requests run only the jobs whose files changed; pushes to `main` (every mer
 | `Changes` | decides per job whether a pull request needs it (`dorny/paths-filter`); pushes to `main` run everything | Phase 6 |
 | `CI result` | the only required check: fails if any job failed, skipped jobs count as passed | Phase 6 |
 | `PR title` (`pr-title.yml`) | the PR title follows Conventional Commits (with squash merging it is the commit release-please reads) | Phase 6 |
-| `Release PR` (`release.yml`, push to `main`) | release-please opens / updates the release PR (versions, `CHANGELOG.md`); merging it creates the tag and GitHub Release | Phase 6 |
-| `Publish images` (`release.yml`, tag `v*.*.*`) | tag = versions in the code, build both images, smoke test, push them to GitHub Container Registry | Phase 6 |
+| `Release PR` (`release.yml`, push to `main`) | release-please opens / updates the release PR (versions, `CHANGELOG.md`) and turns on its auto-merge (manual from minor 50); its merge creates the tag and GitHub Release | Phase 6 |
+| `Publish images` (`publish.yml`, tag `v*.*.*`) | tag = versions in the code, build both images, smoke test, push them to GitHub Container Registry | Phase 6 |
 
 ```mermaid
 flowchart LR
