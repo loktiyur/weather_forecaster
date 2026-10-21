@@ -5,6 +5,7 @@ from httpx import AsyncClient
 
 from tests.api.upstream import GEOCODING_URL, PLACE_URL, mock_forecast, mock_geocoding, mock_place
 from tests.fixtures import load_fixture
+from tests.logs import json_logs
 
 CURRENT = "/api/v1/weather/current"
 FORECAST = "/api/v1/weather/forecast"
@@ -90,21 +91,24 @@ async def test_unknown_city_returns_404(client: AsyncClient, respx_mock: respx.M
 
 
 async def test_upstream_failure_returns_502(
-    client: AsyncClient, respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture
+    client: AsyncClient, respx_mock: respx.MockRouter
 ) -> None:
     mock_geocoding(respx_mock)
     mock_forecast(respx_mock, "forecast_current").mock(
         return_value=httpx.Response(500, json={"error": True, "reason": "internal db error"})
     )
 
-    response = await client.get(CURRENT, params={"city": "Prague"})
+    with json_logs() as lines:
+        response = await client.get(CURRENT, params={"city": "Prague"})
 
     assert response.status_code == 502
     error = response.json()["error"]
     assert error["code"] == "UPSTREAM_ERROR"
     # Internal details are logged, not leaked to the client.
     assert "internal db error" not in error["message"]
-    assert "internal db error" in caplog.text
+    [logged] = [line for line in lines() if line["event"] == "upstream_error"]
+    assert logged["service"] == "Open-Meteo Forecast"
+    assert logged["detail"] == "HTTP 500: internal db error"
 
 
 async def test_upstream_timeout_returns_504(

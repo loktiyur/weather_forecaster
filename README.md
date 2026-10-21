@@ -1,9 +1,36 @@
 # Weather Forecaster
 
-Async REST API that shows the current weather and a daily forecast for a city entered by the user.
+Current weather and a 7-day forecast for any city: an async FastAPI backend with a Redis
+cache, a Vue frontend in four languages, both shipped as Docker images.
+
+<p>
+  <img src="docs/screenshots/search.png" alt="Current weather and 7-day forecast for Prague" width="49%">
+  <img src="docs/screenshots/places.png" alt="All places matching Odessa" width="49%">
+</p>
+<p>
+  <img src="docs/screenshots/phone-dark-uk.png" alt="Kyiv in Ukrainian, phone, dark mode" width="28%">
+  <img src="docs/screenshots/not-a-city-cs.png" alt="A country name explained, in Czech" width="70%">
+</p>
 
 - Architecture and tech stack: [ARCHITECTURE.md](ARCHITECTURE.md)
 - Implementation phases and progress: [ROADMAP.md](ROADMAP.md)
+- What changed in each version: [CHANGELOG.md](CHANGELOG.md)
+- API reference: http://localhost:8000/docs once the API runs (OpenAPI, try every endpoint there)
+
+## Quick start
+
+Only Docker is needed:
+
+```bash
+git clone git@github.com:loktiyur/weather_forecaster.git && cd weather_forecaster
+docker compose --profile full up -d --build     # builds and starts web, api and redis
+open http://localhost:8080                      # the app (API docs: http://localhost:8080/docs)
+docker compose --profile full down              # stop everything
+```
+
+Released versions can also run from the published images, without building:
+`ghcr.io/loktiyur/weather-forecaster-api:1.0.0` and `ghcr.io/loktiyur/weather-forecaster-web:1.0.0`
+(see [Releases](#releases)). For development, read on.
 
 ## Requirements
 
@@ -136,6 +163,48 @@ docker compose --profile full down             # stop everything
 `poe smoke-test` calls the real Open-Meteo API once, because its job is to prove the running
 container works end to end; the test suite itself never calls external APIs.
 
+## Logs
+
+The API logs with [structlog](https://www.structlog.org/): readable lines on your terminal,
+one JSON object per line in the container (the image sets `LOG_FORMAT=json`).
+
+```bash
+docker compose --profile full logs -f api     # JSON lines
+```
+
+```json
+{"method": "GET", "path": "/api/v1/weather/current", "query": "city=Brno&lang=cs", "status": 200, "duration_ms": 311.2, "event": "request", "request_id": "3cfaaf2816d5c019117b9116ba28ef57", "logger": "app.access", "level": "info", "timestamp": "2026-10-20T13:47:58.059Z"}
+```
+
+Our code writes every line as an **event name plus fields**, so each detail can be searched on
+its own (`status`, `attempt`, `key`, ...):
+
+| Event | Level | When | Fields |
+|-------|-------|------|--------|
+| `request` | info | a request is done (successful health checks are left out) | `method`, `path`, `query`, `status`, `duration_ms` |
+| `upstream_retry` | warning | Open-Meteo failed temporarily, trying again | `service`, `attempt`, `max_attempts`, `status` or `error` |
+| `upstream_error` / `upstream_timeout` | warning | Open-Meteo still failing after the last attempt | `service` (`detail`) |
+| `cache_unavailable` | warning | Redis did not answer; the request goes on without the cache | `operation` (`read` / `write`), `key`, `error` |
+| `cache_entry_unreadable` | warning | a cache entry no longer matches the model; treated as a miss | `key` |
+| `redis_unreachable` | warning | Redis is down at startup | `redis` (the URL without credentials) |
+
+Lines from libraries (uvicorn's server messages, httpx's `HTTP Request: GET ...` for every call
+to Open-Meteo) keep their own text, in the same format and with the same `request_id`.
+
+- **Request id.** Every response has an `X-Request-ID` header, and every log line written while
+  the request was handled carries the same `request_id`: the access line, the calls to
+  Open-Meteo, any warning. nginx creates the id and writes it into its own access log too
+  (`rid=...`), so one id finds a request in both logs:
+  ```bash
+  docker compose --profile full logs | grep 3cfaaf2816d5c019117b9116ba28ef57
+  ```
+  A caller can send its own `X-Request-ID` (letters, digits, `.`, `_`, `-`, up to 64); anything
+  else is replaced.
+- **Health checks** from Docker (every 10 s) are not logged while they succeed; a failing one is.
+- **Settings:** `LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`) and
+  `LOG_FORMAT` (`text` or `json`), in `.env` or the environment:
+  `LOG_LEVEL=DEBUG poetry run uvicorn app.main:app --reload`.
+
 ## API
 
 | Endpoint | Query parameters |
@@ -211,6 +280,11 @@ curl "http://localhost:8000/api/v1/weather/forecast?city=Prague&days=40"
 | 502 | `UPSTREAM_ERROR` | Open-Meteo / GeoNames returned an error |
 | 504 | `UPSTREAM_TIMEOUT` | Open-Meteo / GeoNames did not answer in time |
 
+Temporary failures of Open-Meteo (timeouts, dropped connections, HTTP 5xx and 429) are retried
+up to 3 attempts in total, with short growing pauses (~0.2 s, ~0.4 s) and a time budget of 8 s;
+`UPSTREAM_ERROR` / `UPSTREAM_TIMEOUT` come only after the last attempt. Other 4xx answers are
+never retried: asking again would give the same answer. Each retry is logged as a warning.
+
 ## Checks
 
 Tasks are defined in `pyproject.toml` under `[tool.poe.tasks]` and run with [poethepoet](https://poethepoet.natn.io/).
@@ -251,24 +325,92 @@ poetry run poe --help            # list all tasks
 
 ### CI
 
-Four jobs run on every pull request; all are required checks for merging into `main`:
+`.github/workflows/ci.yml` runs on every pull request and on every push to `main`:
 
-| Job | Steps |
-|-----|-------|
-| `Lint, type-check, test` | lint, format check, mypy, unit + API tests |
-| `Redis integration` | starts `redis:7.4-alpine` as a service container, runs the integration tests, then all tests with the coverage gate |
-| `Docker image` | builds the API and web images, starts the full stack with Compose, runs `scripts/smoke_test.sh` against both |
-| `Frontend` | API types match the backend, ESLint, Prettier, vue-tsc, Vitest, production build |
+| Job | Steps | On a pull request, runs when it changes |
+|-----|-------|-----------------------------------------|
+| `Changes` | decides which jobs a pull request needs | always |
+| `Lint, type-check, test` | lint, format check, mypy, unit + API tests | `app/`, `tests/`, `scripts/`, Poetry files, `*.md` (ruff checks the Python examples in Markdown) |
+| `Redis integration` | starts `redis:7.4-alpine` as a service container, runs the integration tests, then all tests with the coverage gate | `app/`, `tests/`, Poetry files |
+| `Docker image` | builds the API and web images, starts the full stack with Compose, runs `scripts/smoke_test.sh` against both | `app/`, `frontend/`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `scripts/smoke_test.sh`, Poetry files |
+| `Frontend` | API types match the backend, ESLint, Prettier, vue-tsc, Vitest, production build | `frontend/`, `app/` (a backend change can change the API contract), `scripts/export_openapi.py` |
+| `CI result` | fails if any job failed; skipped jobs count as passed | always |
 
-Tip: after `eval $(poetry env activate)` the `poetry run` prefix can be dropped (`poe check`).
+- **Pull requests** run only the jobs whose files changed: a README fix runs only the lint job,
+  a frontend change skips the Python jobs. A change to `.github/workflows/` runs everything.
+- **Pushes to `main`** (every merge) always run every job.
+- **`CI result` is the required check for all of them** in the `main` ruleset. A skipped job
+  never reports a status of its own, so requiring each job would block every pull request that
+  skips one. The ruleset also requires `PR title` (`.github/workflows/pr-title.yml`, see Releases).
 
-Run a single file, a single test, or tests matching a name:
+## Releases
+
+Versions are set automatically from the commit messages, following
+[Conventional Commits](https://www.conventionalcommits.org/) and
+[Semantic Versioning](https://semver.org/). With squash merging, the **PR title** is the commit:
+
+| PR title | Release | Example |
+|----------|---------|---------|
+| `fix: ...` (also `perf:`, `revert:`) | patch | 1.4.2 → 1.4.3 |
+| `feat: ...` | minor | 1.9.0 → 1.10.0 (the numbers are counters, not digits) |
+| `feat!: ...`, or a `BREAKING CHANGE: ...` line in the description | major | 1.10.0 → 2.0.0 |
+| a `Release-As: 2.0.0` line in the description | exactly that version | milestones, like the planned 2.0.0 |
+| `chore:`, `docs:`, `ci:`, `test:`, `refactor:`, `build:`, `style:` | no release | they go out with the next release |
+
+The `PR title` check fails a pull request whose title does not follow this format, so no change
+is silently left out of a release.
+
+**How a release happens** (`.github/workflows/release.yml`, with
+[release-please](https://github.com/googleapis/release-please)):
+
+1. **Every merge into `main`**: release-please opens or updates one pull request,
+   `chore: release X.Y.Z`. It bumps the version in `pyproject.toml`, `app/main.py`,
+   `frontend/package.json`, `frontend/package-lock.json` and `frontend/openapi.json`, and adds
+   the new section to `CHANGELOG.md`, made from the `feat:` and `fix:` titles since the last
+   release. More merges update the same PR.
+2. **You merge the release PR when you want to ship.** CI runs on it like on any PR.
+3. release-please then creates the tag `vX.Y.Z` and a GitHub Release with the changelog.
+4. **The tag publishes the images**: the workflow checks that the tag matches the versions in
+   the code, builds both images, runs the smoke test against them, and only then pushes them to
+   GitHub Container Registry:
+
+| Image | Tags (for 1.4.0) |
+|-------|------------------|
+| `ghcr.io/loktiyur/weather-forecaster-api` | `1.4.0`, `1.4`, `latest` |
+| `ghcr.io/loktiyur/weather-forecaster-web` | `1.4.0`, `1.4`, `latest` |
+
+A major version is never automatic: it means "something works differently now", not "a lot
+was added". When a release PR reaches minor 50, the workflow comments on it as a reminder to
+decide about a milestone release (`Release-As: 2.0.0`).
+
+### One-time setup
+
+1. **Squash merging only**: Settings → General → Pull Requests: allow only *squash merging*,
+   with *Default commit message: Pull request title and description* (so `Release-As:` and
+   `BREAKING CHANGE:` lines in a description reach the commit).
+2. **A token for release-please.** GitHub starts no workflows for pull requests and tags created
+   with a workflow's own token, so the release PR would get no CI (and could never be merged),
+   and its tag would publish no images. Create a *fine-grained personal access token*
+   (Settings of your account → Developer settings → Personal access tokens → Fine-grained
+   tokens) with access to **this repository only** and the permissions **Contents: read and
+   write** and **Pull requests: read and write**. Save it as the repository secret
+   `RELEASE_PLEASE_TOKEN` (repository Settings → Secrets and variables → Actions). Note its
+   expiry date: when it expires, the release job fails with a message pointing here.
+3. **Required checks** in the `main` ruleset: `CI result` and `PR title`.
+
+### First release
+
+release-please counts commits from the last release, so the first one, v1.0.0, is created by
+hand once, after this phase is merged:
 
 ```bash
-poetry run pytest tests/unit/test_weather_codes.py
-poetry run pytest tests/unit/test_weather_codes.py::test_known_codes
-poetry run pytest -k geocode
+git switch main && git pull
+gh release create v1.0.0 --target main --title "Weather Forecaster 1.0.0" \
+  --notes "$(awk '/^## \[1\.0\.0\]/{f=1; next} /^## |^\[1\.0\.0\]:/{f=0} f' CHANGELOG.md)"
 ```
+
+The new tag publishes the 1.0.0 images; from then on, releases come from release PRs. Until
+v1.0.0 exists, the release job only notes that it is waiting for it.
 
 ### Running tests from PyCharm
 

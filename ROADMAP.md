@@ -156,15 +156,31 @@ A Vue 3 + TypeScript single-page app in `frontend/`, using only the public REST 
 ## Phase 6 — Release 1.0
 Branch: `phase-6-release`
 
-- [ ] Retries with `tenacity` for transient upstream errors (timeouts, 5xx), with backoff and a small attempt limit
-- [ ] Structured logging (JSON in containers, readable locally) with a request id middleware (`X-Request-ID` in responses and logs)
-- [ ] `LOG_LEVEL` setting
-- [ ] Docker healthcheck requests (`/health`) kept out of the access log
-- [ ] README: screenshots, quick start (`docker compose --profile full up`), API examples, links to the docs
-- [ ] `CHANGELOG.md`
-- [ ] Tag `v1.0.0`
+- [x] Retries with `tenacity` in `get_json` for temporary upstream failures (timeouts, dropped connections, 5xx, 429): 3 attempts, exponential backoff with jitter, 8 s budget; other 4xx are never retried; each retry is logged
+- [x] Structured logging with `structlog` (JSON in containers, readable locally), also for uvicorn's and httpx's log lines; our own code logs in one style, an event name plus fields (`upstream_retry`, `cache_unavailable`, ...); request id middleware: `X-Request-ID` in responses and on every log line of the request, created by nginx and written into its access log too
+- [x] `LOG_LEVEL` and `LOG_FORMAT` settings
+- [x] Successful health checks (`/health`, `/health/ready`) kept out of the access log; failing ones are logged
+- [x] README: screenshots, quick start (`docker compose --profile full up`), API examples, logs, releases, links to the docs
+- [x] `CHANGELOG.md`; versions set to 1.0.0 (`pyproject.toml`, the API, `frontend/package.json`; a test keeps the API and `pyproject.toml` in step)
+- [ ] First release `v1.0.0` by hand after this phase is merged (README → Releases → First release); later releases come from release PRs
 
-**CI additions:** on tag `v*`: build and push the `api` and `web` images to GitHub Container Registry (first CD step).
+**CI additions:**
+- [x] **Pull requests run only the jobs for the parts they change.** A first job, `Changes` (`dorny/paths-filter`), compares the PR branch with `main` and decides per job; the other jobs start only when their files changed:
+
+  | Job | Runs when the PR changes |
+  |-----|--------------------------|
+  | `Lint, type-check, test` | `app/`, `tests/`, `scripts/`, `pyproject.toml`, `poetry.lock`, `*.md` (ruff also checks the Python examples in Markdown) |
+  | `Redis integration` | `app/`, `tests/`, `pyproject.toml`, `poetry.lock` |
+  | `Docker image` | `app/`, `frontend/`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `scripts/smoke_test.sh`, `pyproject.toml`, `poetry.lock` |
+  | `Frontend` | `frontend/`, `app/` (a backend change can change the API contract this job checks), `scripts/export_openapi.py` |
+
+  A change to `.github/workflows/` runs every job.
+- [x] **Pushes to `main` (every merge) always run all jobs**, whatever changed.
+- [x] **One required check, `CI result`.** It waits for all jobs and fails if any of them failed; skipped jobs count as passed. The ruleset then requires only this check, so a PR that skips jobs is not blocked by checks that never reported, and a new job needs no ruleset change.
+- [x] On tag `v*.*.*` (`release.yml`): check the tag against the versions in the code, build both images, smoke-test them, then push them to GitHub Container Registry (`<version>`, `<major>.<minor>`, `latest`); first CD step
+- [x] Versions from Conventional Commits with **release-please**: `fix:` → patch, `feat:` → minor, `feat!:` / `BREAKING CHANGE:` → major, `Release-As:` for milestones, `chore:` & co. release nothing. Every merge updates one release PR (versions in all five files + `CHANGELOG.md`); merging it creates the tag, which publishes the images. A comment on the release PR at minor 50 suggests deciding about a milestone release
+- [x] `PR title` check (`amannn/action-semantic-pull-request`): with squash merging the title is the commit release-please reads
+- [x] `scripts/export_openapi.py` writes whole-number floats like JavaScript (`16`, not `16.0`), so release-please's rewrite of `openapi.json` keeps the "API types up to date" check green
 
 ---
 

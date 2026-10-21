@@ -32,7 +32,8 @@ FROM ${PYTHON_IMAGE} AS runtime
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    APP_ENV=prod
+    APP_ENV=prod \
+    LOG_FORMAT=json
 
 # Never run as root inside the container.
 RUN groupadd --system --gid 10001 app \

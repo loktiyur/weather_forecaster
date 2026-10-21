@@ -1,9 +1,9 @@
 """Map exceptions to HTTP responses that all share the `ErrorResponse` format."""
 
-import logging
 from collections.abc import Mapping
 from typing import Any
 
+import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -19,7 +19,7 @@ from app.core.exceptions import (
 )
 from app.schemas.errors import ErrorBody, ErrorResponse, FieldError
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 HTTP_ERROR_CODES = {
     status.HTTP_404_NOT_FOUND: "NOT_FOUND",
@@ -63,8 +63,9 @@ async def _not_supported(_: Request, exc: Exception) -> JSONResponse:
 
 
 async def _upstream_error(_: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, UpstreamServiceError)
     # The real cause goes to the logs; the client gets a message without internal details.
-    logger.warning("Upstream error: %s", exc)
+    log.warning("upstream_error", service=exc.service, detail=exc.detail)
     return error_response(
         status.HTTP_502_BAD_GATEWAY,
         "UPSTREAM_ERROR",
@@ -73,7 +74,8 @@ async def _upstream_error(_: Request, exc: Exception) -> JSONResponse:
 
 
 async def _upstream_timeout(_: Request, exc: Exception) -> JSONResponse:
-    logger.warning("Upstream timeout: %s", exc)
+    assert isinstance(exc, UpstreamTimeoutError)
+    log.warning("upstream_timeout", service=exc.service)
     return error_response(
         status.HTTP_504_GATEWAY_TIMEOUT,
         "UPSTREAM_TIMEOUT",

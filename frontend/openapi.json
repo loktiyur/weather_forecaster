@@ -3,7 +3,7 @@
   "info": {
     "title": "Weather Forecaster",
     "description": "Current weather and daily forecast for a city.",
-    "version": "0.3.0"
+    "version": "1.0.0"
   },
   "paths": {
     "/api/v1/weather/current": {
@@ -581,7 +581,7 @@
             "type": "number",
             "title": "Temperature",
             "examples": [
-              16.0
+              16
             ]
           },
           "apparent_temperature": {
@@ -1004,8 +1004,8 @@
           },
           "latitude": {
             "type": "number",
-            "maximum": 90.0,
-            "minimum": -90.0,
+            "maximum": 90,
+            "minimum": -90,
             "title": "Latitude",
             "examples": [
               50.08804
@@ -1013,8 +1013,8 @@
           },
           "longitude": {
             "type": "number",
-            "maximum": 180.0,
-            "minimum": -180.0,
+            "maximum": 180,
+            "minimum": -180,
             "title": "Longitude",
             "examples": [
               14.42076
