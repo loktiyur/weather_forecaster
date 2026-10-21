@@ -178,12 +178,12 @@ Both apps run on the host and reload on save; Docker runs only the infrastructur
 app/
 ├── main.py          # create_app(), lifespan: HTTP client, Redis, WeatherService
 ├── config.py        # Settings
-├── api/             # routes, query models, error handlers, dependencies
+├── api/             # routes, query models, error handlers, dependencies, request middleware
 ├── services/        # WeatherService: cache-aside, geocode → weather
-├── clients/         # Open-Meteo / GeoNames clients, shared get_json
+├── clients/         # Open-Meteo / GeoNames clients, shared get_json (with retries)
 ├── cache/           # Cache interface, RedisCache, key layout
 ├── schemas/         # Pydantic models: API contract
-└── core/            # domain exceptions, WMO weather codes
+└── core/            # domain exceptions, WMO weather codes, logging setup
 ```
 
 | Layer | Knows about | Does **not** know about |
@@ -601,6 +601,14 @@ Validation errors also list every invalid field:
 | Constraint violated, e.g. overlapping stops (v2.0) | `ConflictError` | `409` |
 | Redis down | logged, request continues without cache | `200` |
 
+### Retries and logs (v1.0)
+
+**Retries.** Every call to Open-Meteo goes through `get_json` (`app/clients/http.py`), which retries temporary failures with **tenacity**: timeouts, dropped connections, HTTP 5xx and 429. At most 3 attempts with exponential backoff and jitter (~0.2 s, ~0.4 s), and a time budget of 8 s, so a user never waits for three full timeouts. Other 4xx answers ("Location ID not found") would come back the same and are never retried. After the last attempt the error is the same as without retries (`UPSTREAM_ERROR` / `UPSTREAM_TIMEOUT`). GeoNames calls go through geopy and are not retried.
+
+**Logs.** `app/core/logging.py` configures **structlog** for our own log calls *and* for the standard library loggers of uvicorn and httpx, so every line has the same fields: `timestamp`, `level`, `logger`, `event` and any extra fields. Our code logs in one style only: `structlog.get_logger(__name__)` with a short event name and named fields (`log.warning("upstream_retry", service=..., attempt=2, status=503)`), so every detail is a field a log system can filter on, not words inside a sentence. Libraries keep their own message text; they reach the same handler through the standard library bridge. `LOG_FORMAT=json` (set in the API image) writes one JSON object per line for log systems; `text` writes readable lines for a terminal.
+
+**Request id.** `RequestContextMiddleware` (`app/api/middleware.py`, a plain ASGI middleware) gives each request an id. It keeps the caller's `X-Request-ID` if it looks like an id, otherwise it generates one. It binds the id with `structlog.contextvars`, so every line written while the request is handled carries `request_id`, and it returns the id in the response header. nginx creates the id for requests from the browser and writes it into its own access log, so one id connects the nginx line, the API's access line and its calls to Open-Meteo. The middleware also writes the access log (method, path, query, status, duration); uvicorn's own access log is switched off, and successful health checks are left out, because Docker calls them every 10 s.
+
 ---
 
 ## 11. Project structure
@@ -655,7 +663,8 @@ All settings come from environment variables (`.env` locally, secrets manager in
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis (`redis://redis:6379/0` inside compose) | v1.0 |
 | `REDIS_TIMEOUT_SECONDS` | `0.5` | give up on a slow Redis quickly | v1.0 |
 | `CACHE_TTL_GEOCODING_SECONDS` / `_CURRENT_` / `_FORECAST_` | `604800` / `600` / `3600` | cache lifetimes | v1.0 |
-| `LOG_LEVEL` | `INFO` | logging | v1.0 (Phase 6) |
+| `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` | v1.0 (Phase 6) |
+| `LOG_FORMAT` | `text` | `text` (readable) or `json` (one object per line; the API image sets `json`) | v1.0 (Phase 6) |
 | `TEST_REDIS_URL` | `redis://localhost:6380/0` | tests only | v1.0 |
 | `DATABASE_URL` | `postgresql+asyncpg://weather:weather@localhost:5432/weather_app` | Postgres | v2.0 |
 | `TEST_DATABASE_URL` | `…@localhost:5433/weather_app_test` | tests only | v2.0 |
@@ -684,7 +693,7 @@ All settings come from environment variables (`.env` locally, secrets manager in
 
 ### CI jobs
 
-All jobs run on every pull request and are required checks in the `main` ruleset.
+Pull requests run only the jobs whose files changed; pushes to `main` (every merge) run all of them. The `main` ruleset requires `CI result`, which reports for all CI jobs (a skipped job never reports a status of its own), and `PR title`.
 
 | Job | Steps | From |
 |-----|-------|------|
@@ -694,19 +703,24 @@ All jobs run on every pull request and are required checks in the `main` ruleset
 | `Frontend` | generated API types match the backend code, ESLint, Prettier, `vue-tsc`, Vitest, build | Phase 5 |
 | `Postgres integration` | `postgres:16-alpine` service container, `alembic upgrade head`, `alembic check`, Postgres integration tests | Phase 8 |
 | `Coverage` | merges coverage from the test jobs, applies the 80 % gate (until Phase 8 the gate runs in `Redis integration`) | Phase 8 |
-| Release (on tag `v*`) | push the `api` and `web` images to GitHub Container Registry | Phase 6 |
+| `Changes` | decides per job whether a pull request needs it (`dorny/paths-filter`); pushes to `main` run everything | Phase 6 |
+| `CI result` | the only required check: fails if any job failed, skipped jobs count as passed | Phase 6 |
+| `PR title` (`pr-title.yml`) | the PR title follows Conventional Commits (with squash merging it is the commit release-please reads) | Phase 6 |
+| `Release PR` (`release.yml`, push to `main`) | release-please opens / updates the release PR (versions, `CHANGELOG.md`); merging it creates the tag and GitHub Release | Phase 6 |
+| `Publish images` (`release.yml`, tag `v*.*.*`) | tag = versions in the code, build both images, smoke test, push them to GitHub Container Registry | Phase 6 |
 
 ```mermaid
 flowchart LR
     pr([pull request])
-    pr --> checks["Lint, type-check, test"]
-    pr --> redisj["Redis integration"]
-    pr --> docker["Docker image"]
-    pr --> fe["Frontend"]
-    pr --> pg["Postgres integration (v2.0)"]
+    pr --> changes["Changes<br/>which parts changed?"]
+    changes --> checks["Lint, type-check, test"]
+    changes --> redisj["Redis integration"]
+    changes --> docker["Docker image"]
+    changes --> fe["Frontend"]
+    changes --> pg["Postgres integration (v2.0)"]
     redisj --> cov["Coverage (v2.0)"]
     pg --> cov
-    checks --> gate{all green?}
+    checks --> gate{"CI result<br/>nothing failed?"}
     docker --> gate
     fe --> gate
     cov --> gate

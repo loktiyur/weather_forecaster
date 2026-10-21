@@ -13,6 +13,7 @@ from app.schemas.location import Location
 from app.schemas.weather import CurrentWeather, DailyForecastDay, Units
 from app.services.weather_service import CacheTtls, WeatherService
 from tests.doubles import InMemoryCache, UnavailableCache
+from tests.logs import json_logs
 
 PRAGUE = Location(name="Prague", country_code="CZ", latitude=50.08, longitude=14.42)
 CURRENT = CurrentWeather(
@@ -259,33 +260,39 @@ async def test_forecast_is_cached_per_number_of_days() -> None:
     assert cache.ttls["weather:forecast:50.08:14.42:2:metric"] == CacheTtls().forecast
 
 
-async def test_unavailable_cache_falls_back_to_the_clients(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_unavailable_cache_falls_back_to_the_clients() -> None:
     weather = FakeWeather()
     service = WeatherService(FakeGeocoding([PRAGUE]), weather, UnavailableCache())
 
-    result = await service.get_current("Prague")
+    with json_logs() as lines:
+        result = await service.get_current("Prague")
 
     assert result.current == CURRENT
     assert result.cached is False
     assert len(weather.calls) == 1
-    assert "Cache unavailable" in caplog.text
+    warnings = [line for line in lines() if line["event"] == "cache_unavailable"]
+    assert {(w["operation"], w["key"]) for w in warnings} == {
+        ("read", "geo:en:prague:"),
+        ("write", "geo:en:prague:"),
+        ("read", "weather:current:50.08:14.42:metric"),
+        ("write", "weather:current:50.08:14.42:metric"),
+    }
+    assert all(w["error"] == "cache is down" for w in warnings)
 
 
-async def test_unreadable_cache_entry_is_treated_as_a_miss(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_unreadable_cache_entry_is_treated_as_a_miss() -> None:
     cache = InMemoryCache(values={"geo:en:prague:": '{"old": "format"}'})
     geocoding = FakeGeocoding([PRAGUE])
     service = WeatherService(geocoding, FakeWeather(), cache)
 
-    result = await service.get_current("Prague")
+    with json_logs() as lines:
+        result = await service.get_current("Prague")
 
     assert result.location == PRAGUE
     assert len(geocoding.calls) == 1
     assert Location.model_validate_json(cache.values["geo:en:prague:"]) == PRAGUE  # overwritten
-    assert "unreadable cache entry geo:en:prague:" in caplog.text
+    [warning] = [line for line in lines() if line["event"] == "cache_entry_unreadable"]
+    assert warning["key"] == "geo:en:prague:"
 
 
 async def test_unknown_city_is_not_cached() -> None:

@@ -1,3 +1,5 @@
+import tomllib
+
 import pytest
 import respx
 from fastapi import FastAPI
@@ -7,13 +9,14 @@ from app.api.dependencies import get_weather_service
 from app.clients.base import GeocodingClient, SearchResult
 from app.clients.geonames_geocoding import GeoNamesGeocodingClient
 from app.config import Settings
-from app.main import create_app, lifespan
+from app.main import _without_credentials, create_app, lifespan
 from app.schemas.language import Language
 from app.schemas.location import Location
 from app.schemas.weather import CurrentWeather, DailyForecastDay, Units
 from app.services.weather_service import WeatherService
 from tests.api.upstream import mock_forecast, mock_geocoding
 from tests.doubles import UnavailableCache
+from tests.logs import json_logs
 from tests.unit.clients.test_geonames_geocoding import FakeGeoNames
 
 
@@ -66,7 +69,7 @@ async def test_not_ready_when_cache_is_down(app: FastAPI, client: AsyncClient) -
 
 
 async def test_lifespan_wires_the_real_service(
-    settings: Settings, respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture
+    settings: Settings, respx_mock: respx.MockRouter
 ) -> None:
     """Runs the real startup/shutdown (ASGITransport does not), so no dependency overrides.
 
@@ -76,16 +79,18 @@ async def test_lifespan_wires_the_real_service(
     mock_forecast(respx_mock, "forecast_current")
     app = create_app(settings)
 
-    async with lifespan(app):
-        service = app.state.weather_service
-        assert isinstance(service, WeatherService)
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.get("/api/v1/weather/current", params={"city": "Prague"})
-        assert response.status_code == 200
-        assert response.json()["cached"] is False
+    with json_logs() as lines:
+        async with lifespan(app):
+            service = app.state.weather_service
+            assert isinstance(service, WeatherService)
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.get("/api/v1/weather/current", params={"city": "Prague"})
+            assert response.status_code == 200
+            assert response.json()["cached"] is False
 
-    assert "running without cache" in caplog.text
+    [warning] = [line for line in lines() if line["event"] == "redis_unreachable"]
+    assert warning["redis"] == "redis://localhost:1/0"
     # The shared HTTP client is closed on shutdown.
     assert service._weather._http.is_closed  # type: ignore[attr-defined]
 
@@ -128,3 +133,23 @@ async def test_lookup_by_id_without_provider_support_returns_501(
             "message": "GeoNames does not support looking places up by id.",
         }
     }
+
+
+def test_api_version_matches_pyproject() -> None:
+    # The release workflow checks the tag against pyproject.toml; /docs must show the same.
+    with open("pyproject.toml", "rb") as file:
+        version = tomllib.load(file)["project"]["version"]
+
+    assert create_app(Settings(_env_file=None)).version == version
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("redis://:secret@cache:6379/0", "redis://cache:6379/0"),
+        ("redis://user:secret@cache:6379/0", "redis://cache:6379/0"),
+        ("redis://localhost:6379/0", "redis://localhost:6379/0"),
+    ],
+)
+def test_redis_url_is_logged_without_credentials(url: str, expected: str) -> None:
+    assert _without_credentials(url) == expected

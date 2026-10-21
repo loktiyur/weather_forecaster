@@ -18,6 +18,7 @@ from app.main import create_app, lifespan
 from app.services.weather_service import WeatherService
 from tests.api.upstream import mock_forecast, mock_geocoding
 from tests.integration.conftest import TEST_REDIS_URL
+from tests.logs import json_logs
 
 pytestmark = pytest.mark.integration
 
@@ -73,18 +74,18 @@ async def test_lifespan_connects_to_redis(
     settings: Settings,
     redis_client: redis.Redis,
     respx_mock: respx.MockRouter,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Real startup with a reachable Redis: no warning, and responses get cached."""
     mock_geocoding(respx_mock)
     mock_forecast(respx_mock, "forecast_current")
     app = create_app(settings.model_copy(update={"redis_url": TEST_REDIS_URL}))
 
-    async with lifespan(app):
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            await ac.get(CURRENT, params={"city": "Prague"})
-            second = await ac.get(CURRENT, params={"city": "Prague"})
+    with json_logs() as lines:
+        async with lifespan(app):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+                await ac.get(CURRENT, params={"city": "Prague"})
+                second = await ac.get(CURRENT, params={"city": "Prague"})
 
     assert second.json()["cached"] is True
-    assert "running without cache" not in caplog.text
+    assert not [line for line in lines() if line["level"] == "warning"]

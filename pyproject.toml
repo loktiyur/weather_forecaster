@@ -1,6 +1,6 @@
 [project]
 name = "weather-forecaster"
-version = "0.3.0"
+version = "1.0.0"
 description = "Async REST API that shows the current weather and forecast for a city."
 authors = [{ name = "Yurii Loktionov", email = "yurii.loktionov@proton.me" }]
 readme = "README.md"
@@ -12,6 +12,8 @@ dependencies = [
     "httpx (>=0.28.1,<0.29.0)",
     "geopy (>=2.5.0,<3.0.0)",
     "redis (>=8.1.0,<9.0.0)",
+    "tenacity (>=9.1.4,<9.2.0)",
+    "structlog (>=26.1.0,<27.0.0)",
 ]
 
 [dependency-groups]

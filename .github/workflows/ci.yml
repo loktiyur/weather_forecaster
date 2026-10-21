@@ -9,10 +9,61 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  pull-requests: read  # the Changes job lists the files of a pull request
+
+# Pull requests run only the jobs whose files changed (see the `Changes` job); pushes to
+# main (every merge) run all of them. Each job's `if` reads: "not a PR, or my files changed".
 jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      checks: ${{ steps.filter.outputs.checks }}
+      redis: ${{ steps.filter.outputs.redis }}
+      docker: ${{ steps.filter.outputs.docker }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - name: Which parts did the pull request change?
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          # A change to the workflows themselves runs every job (`*ci` is in each list).
+          filters: |
+            ci: &ci
+              - ".github/workflows/**"
+            python: &python
+              - *ci
+              - "app/**"
+              - "pyproject.toml"
+              - "poetry.lock"
+            checks:
+              - *python
+              - "tests/**"
+              - "scripts/**"
+              - "**/*.md"  # ruff also checks the Python examples in Markdown
+            redis:
+              - *python
+              - "tests/**"
+            docker:
+              - *python
+              - "frontend/**"
+              - "Dockerfile"
+              - ".dockerignore"
+              - "docker-compose.yml"
+              - "scripts/smoke_test.sh"
+            frontend:
+              - *ci
+              - "frontend/**"
+              - "app/**"  # a backend change can change the API contract this job checks
+              - "scripts/export_openapi.py"
+
   checks:
-    # The name is a required status check in the `main` ruleset: renaming it breaks the rule.
     name: Lint, type-check, test
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.checks == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +94,8 @@ jobs:
 
   redis-integration:
     name: Redis integration
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.redis == 'true'
     runs-on: ubuntu-latest
     services:
       # Official image, pulled by GitHub and started next to the job (nothing is built).
@@ -81,6 +134,8 @@ jobs:
 
   docker-image:
     name: Docker image
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -122,6 +177,8 @@ jobs:
 
   frontend:
     name: Frontend
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -175,3 +232,22 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # The only required check in the `main` ruleset (renaming it breaks the rule). Skipped jobs
+  # never report a status of their own, so requiring them would block every PR that skips
+  # one; this job reports for all of them.
+  ci-result:
+    name: CI result
+    needs: [changes, checks, redis-integration, docker-image, frontend]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed or was not needed
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "Job results: $RESULTS"
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            echo "::error::At least one job failed or was cancelled."
+            exit 1
+          fi

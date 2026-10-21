@@ -1,8 +1,8 @@
-import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TypeVar
 
+import structlog
 from pydantic import TypeAdapter, ValidationError
 
 from app.cache import keys
@@ -22,7 +22,7 @@ from app.schemas.weather import (
     Units,
 )
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 T = TypeVar("T")
 
@@ -204,7 +204,7 @@ class WeatherService:
                 return adapter.validate_json(raw), True
             except ValidationError:
                 # E.g. the model changed since the entry was written: treat it as a miss.
-                logger.warning("Ignoring unreadable cache entry %s", key)
+                log.warning("cache_entry_unreadable", key=key)
 
         value = await load()
         await self._cache_set(key, adapter.dump_json(value).decode(), ttl_seconds)
@@ -216,7 +216,8 @@ class WeatherService:
         try:
             return await self._cache.get(key)
         except CacheUnavailableError as exc:
-            logger.warning("Cache unavailable, calling the API instead: %s", exc)
+            # Not fatal: the provider is asked instead.
+            log.warning("cache_unavailable", operation="read", key=key, error=str(exc))
             return None
 
     async def _cache_set(self, key: str, value: str, ttl_seconds: int) -> None:
@@ -225,7 +226,7 @@ class WeatherService:
         try:
             await self._cache.set(key, value, ttl_seconds)
         except CacheUnavailableError as exc:
-            logger.warning("Cache unavailable, result not stored: %s", exc)
+            log.warning("cache_unavailable", operation="write", key=key, error=str(exc))
 
     async def cache_is_reachable(self) -> bool:
         return self._cache is not None and await self._cache.ping()

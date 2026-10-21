@@ -4,8 +4,10 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from tenacity import wait_none
 
 from app.api.dependencies import get_weather_service
+from app.clients import http as http_module
 from app.clients.open_meteo_geocoding import OpenMeteoGeocodingClient
 from app.clients.open_meteo_weather import OpenMeteoWeatherClient
 from app.config import Settings
@@ -16,6 +18,12 @@ from tests.doubles import InMemoryCache
 # Nothing listens on port 1: tests that build the app from settings must never
 # touch the developer's Redis. Integration tests use their own Redis (tests/integration).
 UNREACHABLE_REDIS_URL = "redis://localhost:1/0"
+
+
+@pytest.fixture(autouse=True)
+def no_retry_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retries happen as in production, only without the pauses between attempts."""
+    monkeypatch.setattr(http_module, "RETRY_WAIT", wait_none())
 
 
 @pytest.fixture

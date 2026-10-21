@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_env: Literal["dev", "test", "prod"] = "dev"
+
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # text: readable lines for a terminal; json: one object per line (the API image sets it).
+    log_format: Literal["text", "json"] = "text"
 
     geocoding_provider: Literal["open_meteo", "geonames"] = "open_meteo"
     geonames_username: str | None = None
@@ -28,6 +32,11 @@ class Settings(BaseSettings):
     cache_ttl_geocoding_seconds: int = 7 * 24 * 3600
     cache_ttl_current_seconds: int = 600
     cache_ttl_forecast_seconds: int = 3600
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _upper_log_level(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _geonames_needs_username(self) -> Self:
