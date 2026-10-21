@@ -30,10 +30,11 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v3
         with:
-          # A change to the workflows themselves runs every job (`*ci` is in each list).
+          # A change to this workflow runs every job (`*ci` is in each list). The other
+          # workflows (release, PR title) run none: these jobs do not exercise them.
           filters: |
             ci: &ci
-              - ".github/workflows/**"
+              - ".github/workflows/ci.yml"
             python: &python
               - *ci
               - "app/**"
