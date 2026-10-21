@@ -4,6 +4,14 @@ All notable changes to this project. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0](https://github.com/loktiyur/weather_forecaster/compare/v1.0.0...v1.1.0) (2026-10-21)
+
+
+### Features
+
+* edit continue-on-error option[TRIVIAL] ([#10](https://github.com/loktiyur/weather_forecaster/issues/10)) ([8b071e3](https://github.com/loktiyur/weather_forecaster/commit/8b071e303edb09c88c04b80fe2053455c08413cd))
+* edit continue-on-error option[TRIVIAL] ([#8](https://github.com/loktiyur/weather_forecaster/issues/8)) ([1bde9fc](https://github.com/loktiyur/weather_forecaster/commit/1bde9fc5c1b347c5418a5e73757307f04ee33c51))
+
 ## [1.0.0] - 2026-10-20
 
 The basic weather app: a REST API and a web frontend, packaged as two Docker images.
