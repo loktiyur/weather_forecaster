@@ -64,7 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Weather Forecaster",
         description="Current weather and daily forecast for a city.",
-        version="1.0.0",  # x-release-please-version (release-please bumps it)
+        version="1.1.0",  # x-release-please-version (release-please bumps it)
         openapi_tags=TAGS_METADATA,
         lifespan=lifespan,
     )
