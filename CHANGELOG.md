@@ -4,6 +4,13 @@ All notable changes to this project. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0](https://github.com/loktiyur/weather_forecaster/compare/v1.1.1...v1.2.0) (2026-10-26)
+
+
+### Features
+
+* Changed the backend project structure[Phase 7] ([#14](https://github.com/loktiyur/weather_forecaster/issues/14)) ([f98f197](https://github.com/loktiyur/weather_forecaster/commit/f98f197b4d23595ac649cf39997fba6b1fdaa17a))
+
 ## [1.1.1](https://github.com/loktiyur/weather_forecaster/compare/v1.1.0...v1.1.1) (2026-10-21)
 
 
