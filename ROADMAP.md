@@ -191,12 +191,16 @@ Branch: `phase-7-restructure`
 
 The code moves into the structure from ARCHITECTURE.md §6. **No behaviour change**: the existing tests prove the move is safe, and the API contract (OpenAPI schema) stays identical.
 
-- [ ] `app/core/`: config, HTTP client + `get_json`, cache (`Cache`, `RedisCache`), errors, shared exceptions
-- [ ] `app/services/weather/`: router, service, schemas, cache keys, `providers/` (renamed from `clients/`: Open-Meteo, GeoNames)
-- [ ] Tests mirror the new layout
-- [ ] Dependency rules written down as import-linter contracts in `pyproject.toml` (services → core only; no imports from core into services)
+- [ ] `app/core/`: config, HTTP client + `get_json`, errors, shared exceptions
+- [ ] `app/core/cache/`: `Cache` interface, `RedisCache` (the only module importing `redis`), and `get_or_load()`, the cache-aside logic moved out of `WeatherService` (a cache failure counts as a miss)
+- [ ] `app/services/weather/`: router, service, schemas, `cache_keys.py` (key formats and TTLs: weather decisions, not core's), `providers/` (renamed from `clients/`: Open-Meteo, GeoNames)
+- [ ] Tests mirror the new layout in the top-level `tests/` (ARCHITECTURE §11, §13): `tests/core/...` and `tests/services/<service>/{unit,api,integration}/`; shared `conftest.py`, `doubles.py`, `logs.py` and `fixtures/` stay at the top. Tests are not moved into `app/`: they would ship in the image and fall under the import rules
+- [ ] Dependency rules written down as import-linter contracts in `pyproject.toml` (services → core only; no imports from core into services; `redis` imported only in `core/cache/redis.py`)
 
-**CI additions:** new step `Architecture` (`lint-imports`) in the `Lint, type-check, test` job. The `Frontend` job's "API types up to date" check proves the contract did not change.
+- [ ] Frontend grouped by feature (ARCHITECTURE.md §9.1): `src/shared/` (API client, i18n, router, common components) and `src/features/weather/`; tests in `frontend/tests/<feature>/`. Folders for `auth`, `trips` and `stats` come with their phases
+- [ ] Frontend import rules with ESLint's `no-restricted-imports`: features use `shared`, `shared` imports no feature, features import each other only where allowed (`trips` → `weather`, `weather` → `stats`)
+
+**CI additions:** new step `Architecture` (`lint-imports`) in the `Lint, type-check, test` job; the frontend import rules run in the `Frontend` job's existing lint step. The `Frontend` job's "API types up to date" check proves the contract did not change.
 
 ---
 
@@ -227,7 +231,9 @@ Branch: `phase-9-auth`
 - [ ] JWT (`PyJWT`) in an **httpOnly, Secure, SameSite=Lax cookie**, not readable by page scripts
 - [ ] `current_user` / `optional_user` dependencies for the services
 - [ ] `PATCH /api/v1/me/preferences`: validated by a Pydantic model (units, language, home place); weather endpoints use the user's units when `units` is not given
-- [ ] Frontend: register / login / logout, user menu, preferences page
+- [ ] Frontend (`features/auth/`): register / login / logout, user menu, preferences page
+- [ ] Frontend: `GET /me` on start into a Pinia user store; `meta.requiresAuth` routes with a guard redirecting guests to `/login?next=…`; any `401` clears the store and redirects the same way
+- [ ] Frontend: preferences from `localStorage` for guests; after login the saved ones from `/me` take over, changes go to `PATCH /me/preferences`
 
 **CI additions:** auth tests (hashing, token expiry, cookie flags, protected routes return `401`)
 
@@ -242,7 +248,7 @@ Branch: `phase-10-stats`
 - [ ] `GET /api/v1/stats/popular?since=7d&country=CZ`: most searched places (anonymous, aggregated)
 - [ ] `GET /api/v1/me/stats`: my top places, searches per day, my unresolved searches
 - [ ] Indexes for the time-window queries; SQL with `GROUP BY`, `date_trunc`, window functions
-- [ ] Frontend: statistics page with charts; "popular" chips on the search page
+- [ ] Frontend (`features/stats/`): statistics page with charts; "popular" chips on the search page
 
 **CI additions:** import-linter contract "weather must not import stats"
 
@@ -257,7 +263,7 @@ Branch: `phase-11-trips`
 - [ ] `GET/POST/PATCH/DELETE /api/v1/me/trips…`, only the owner can see or change a trip
 - [ ] `GET /api/v1/me/trips/{id}/forecast`: the weather for each stop on its own dates, fetched concurrently through `WeatherService` (and its cache)
 - [ ] Stops more than 16 days ahead return "forecast available from <date>" instead of data
-- [ ] Frontend: trip list, trip editor (stops, dates, order), trip forecast view
+- [ ] Frontend (`features/trips/`): trip list, trip editor (stops, dates, order), trip forecast view
 
 **CI additions:** none beyond new tests
 
@@ -269,7 +275,7 @@ Branch: `phase-12-places`
 - [ ] In the weather service: table `weather.favourite_places` (user, location, position, nickname, `UNIQUE(user_id, location_id)`)
 - [ ] `GET/POST/PATCH/DELETE /api/v1/me/places`
 - [ ] `GET /api/v1/me/dashboard`: current weather for all my places, fetched concurrently (`asyncio.gather`)
-- [ ] Frontend: dashboard page, "save place" button on the search page
+- [ ] Frontend (`features/weather/`): dashboard page, "save place" button on the search page
 - [ ] README and screenshots updated, `CHANGELOG.md`
 - [ ] Tag `v2.0.0`
 

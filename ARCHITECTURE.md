@@ -106,9 +106,9 @@ Widely used, well-maintained tools with a clear job each; the reason for every c
 
 ---
 
-## 4. System overview (v1.0)
+## 4. System overview
 
-### Full stack: `docker compose --profile full up`
+### Full stack (v1.0): `docker compose --profile full up`
 
 ```mermaid
 flowchart LR
@@ -132,6 +132,51 @@ flowchart LR
 ```
 
 The browser only talks to `web`. nginx serves the Vue app and forwards `/api/...` to the `api` container, so frontend and API share one origin (no CORS).
+
+### Full stack (v2.0): the final architecture
+
+```mermaid
+flowchart LR
+    user([Browser])
+
+    subgraph compose["docker compose --profile full"]
+        web["web<br/>nginx: Vue app<br/>features: weather · auth · trips · stats<br/>port 8080"]
+
+        subgraph api["api: FastAPI + Uvicorn, one process"]
+            direction TB
+            trips["services/trips"]
+            weather["services/weather"]
+            stats["services/stats"]
+            core["core<br/>config · auth · cache · db · http · errors · events"]
+        end
+
+        redis[("redis<br/>cache")]
+        db[("db<br/>PostgreSQL<br/>schemas: auth · weather · trips · stats")]
+    end
+
+    geo[[Open-Meteo<br/>Geocoding API]]
+    meteo[[Open-Meteo<br/>Forecast API]]
+
+    user -- "GET /" --> web
+    user -- "GET /api/v1/... + login cookie" --> web
+    web -- "proxy /api" --> api
+    trips -- "calls WeatherService" --> weather
+    weather -. "event LocationSearched" .-> stats
+    trips --> core
+    weather --> core
+    stats --> core
+    core <--> redis
+    core <--> db
+    core -- httpx --> geo
+    core -- httpx --> meteo
+```
+
+The outside stays as in v1.0: the browser talks only to `web`, nginx forwards `/api/...` to `api`, and the login cookie travels on the same origin. What changes is inside:
+
+- **`api` is still one image and one process**, now divided into `core` and three services (§6). `trips` calls `weather` directly; `weather` tells `stats` about searches through an in-process event; all of them reach Redis, Postgres and Open-Meteo only through `core`.
+- **`db` is new**: one PostgreSQL database with one schema per part (§8.2). Migrations run when the `api` container starts.
+- **`redis` stays a disposable cache**: losing it slows requests down, nothing else.
+- **`web` is grouped by feature** like the backend (§9.1), but it never sees the backend's parts: only the REST API.
 
 ### Development mode
 
@@ -207,7 +252,10 @@ app/
 ├── core/                    # infrastructure only: no features
 │   ├── config.py            # Settings
 │   ├── db.py                # Postgres: async engine, session dependency, Base
-│   ├── cache.py             # Cache interface + RedisCache
+│   ├── cache/               # caching mechanism only: knows nothing about weather
+│   │   ├── base.py          #   Cache interface (get/set/ping), CacheUnavailableError
+│   │   ├── redis.py         #   RedisCache: the only module that imports redis
+│   │   └── aside.py         #   get_or_load(): generic cache-aside, a cache failure = a miss
 │   ├── http.py              # shared httpx client + get_json
 │   ├── errors.py            # unified error format, exception handlers
 │   ├── events.py            # tiny in-process publish/subscribe
@@ -216,7 +264,8 @@ app/
 └── services/
     ├── weather/             # 1. the weather engine
     │   ├── router.py        #    /weather/*, /locations/*, /me/places, /me/dashboard
-    │   ├── service.py       #    WeatherService (cache-aside)
+    │   ├── service.py       #    WeatherService: what to cache, via core/cache get_or_load()
+    │   ├── cache_keys.py    #    geo:/place:/weather: keys and their TTLs
     │   ├── places.py        #    "My places" + dashboard
     │   ├── providers/       #    Open-Meteo, GeoNames (renamed from clients/)
     │   ├── repository.py    #    SQL: locations, favourite_places
@@ -244,13 +293,18 @@ Every service has the same layers: **router** (HTTP) → **service** (logic, the
 
 | Part | Responsibility | Tables (schema) |
 |------|----------------|-----------------|
-| **core** | Infrastructure every service uses: config, DB session, Redis, HTTP, errors, events | none |
+| **core** | Infrastructure every service uses: config, DB session, the cache mechanism (interface, Redis adapter, cache-aside), HTTP, errors, events | none |
 | **core/auth** | Who is calling: users, passwords, login cookie, preferences | `auth.users` |
-| **weather** | Places and weather: geocoding, stored places, cached weather, saved places, dashboard | `weather.locations`, `weather.favourite_places` |
+| **weather** | Places and weather: geocoding, stored places, saved places, dashboard; which of its data is cached, under which keys, for how long | `weather.locations`, `weather.favourite_places` |
 | **trips** | Trips made of stops (place + dates) and the weather for each stop | `trips.trips`, `trips.trip_stops` |
 | **stats** | Search events and statistics | `stats.search_events` |
 
 Login is not a service: it is infrastructure that all services need, like the database connection, so it lives in `core`. Saved places belong to `weather`: a saved place is "a location I want weather for", and the dashboard is "current weather for my places".
+
+The cache is not a service either: it has no endpoints, tables or rules of its own, only `get`, `set` and `ping`. Its knowledge is split by who owns it:
+
+- **`core/cache` owns the mechanism**: the `Cache` interface, the Redis adapter, and `get_or_load(cache, key, ttl, load)`: read the key → on a miss call `load` → store the result; a cache error is logged and counts as a miss, so a service never handles Redis failures itself. Only `core/cache/redis.py` and the app startup in `main.py` know the cache is Redis; replacing it changes one module.
+- **Each service owns its decisions**: what is cached, the key format and the TTL (`services/weather/cache_keys.py`: a forecast stays fresh for an hour because of how Open-Meteo updates, which is a weather fact). `trips` and `stats` can cache through the same helper without depending on `weather`.
 
 ### Dependency rules
 
@@ -270,6 +324,7 @@ flowchart TD
 3. **`weather` never imports `trips` or `stats`.** It tells the world about searches with an **event**; whoever is interested subscribes.
 4. **`stats` is called by nobody.** It listens to events and answers its own endpoints.
 5. **Services call each other only through the other service's `service.py`**, never its repository or tables.
+6. **Only `core/cache/redis.py` imports `redis`.** Services depend on the `Cache` interface and `get_or_load()`, never on Redis.
 
 These rules are import-linter contracts in `pyproject.toml`, checked by the `Architecture` step in CI. A forbidden import fails the pipeline.
 
@@ -282,6 +337,8 @@ These rules are import-linter contracts in `pyproject.toml`, checked by the `Arc
 | any service → auth | Dependency: `user: CurrentUser` in the route | Standard FastAPI security dependency |
 
 The event bus is in-process (a dictionary of handlers). If messaging between processes is ever needed (e.g. weather alerts), `publish` is the single place where **RabbitMQ** would plug in.
+
+**The UI talks only to the REST API**, never to a service. It does not know the backend is split into `core` and services, so code can move between them without the frontend noticing, as long as the API stays the same (the generated types and their CI check guard that). One page may use endpoints of several services, but the backend does the coordination: a trip forecast is one call, and `trips` asks `weather` for each stop. Details in §9.1.
 
 ---
 
@@ -370,7 +427,7 @@ Stops more than 16 days ahead (the Open-Meteo forecast limit) get `"forecast ava
 
 Coordinates are rounded to 2 decimals (~1 km) so nearby requests share an entry. City names are lower-cased and trimmed (`"  Prague "` and `"prague"` share `geo:en:prague:`). Weather entries have no language: descriptions and unit labels are translated when the response is built, so all four languages share one cached forecast.
 
-- **Cache-aside** in `WeatherService`: read the key → on a miss call the provider → store the result with its TTL. Values are Pydantic models serialised to JSON; an entry that no longer matches the model is treated as a miss. Errors such as `CityNotFoundError` are not cached.
+- **Cache-aside** in `WeatherService` (from v2.0 the generic `get_or_load()` in `core/cache/aside.py`, §6): read the key → on a miss call the provider → store the result with its TTL. Values are Pydantic models serialised to JSON; an entry that no longer matches the model is treated as a miss. Errors such as `CityNotFoundError` are not cached.
 - **Redis is optional at runtime.** Any cache error is logged and treated as a miss. `/health/ready` reports it with `503`.
 - **HTTP caching:** responses carry `Cache-Control: public, max-age=<TTL>`, so browsers and proxies can reuse them too.
 - **Redis is a disposable cache, never a data store.** It evicts keys under memory pressure (`allkeys-lru`) and may be flushed at any time. Anything that must be kept goes to PostgreSQL.
@@ -461,7 +518,7 @@ erDiagram
 
 ---
 
-## 9. Frontend (v1.0, extended in v2.0)
+## 9. Frontend
 
 A **separate application in the same repository** (`frontend/`), not part of the Python package and not a backend service. It is a client of the public REST API, just like Swagger or curl.
 
@@ -472,12 +529,11 @@ frontend/
 │   ├── api/
 │   │   ├── schema.d.ts      # GENERATED from openapi.json, never edited by hand
 │   │   └── client.ts        # typed openapi-fetch client; failures become ApiError(code)
-│   ├── pages/               # v1: SearchPage, PlacesPage · v2: Login, Dashboard, Trips, Trip, Stats, Preferences
+│   ├── pages/               # SearchPage, PlacesPage
 │   ├── components/          # CurrentWeatherCard, ForecastList, SearchForm, UnitsToggle, LanguageSelect, ErrorBanner
 │   ├── composables/         # useWeatherLookup (parallel requests, stale-answer guard), useUnits
 │   ├── weather/             # display helpers (icons, local times, dates), place links
 │   ├── i18n/                # vue-i18n setup, plural rules, language detection; locales/{en,uk,cs,ru}.json
-│   ├── stores/              # v2: Pinia store for the logged-in user and preferences
 │   └── router.ts
 ├── tests/                   # Vitest: client, helpers, i18n (keys, plurals), the pages
 ├── Dockerfile               # Node build stage → unprivileged nginx runtime stage
@@ -505,7 +561,37 @@ frontend/
 | API calls | Vite proxies `/api` → `localhost:8000` | nginx proxies `/api` → `api:8000` |
 | Same origin | yes (proxy) | yes (proxy), so no CORS configuration |
 
-**Login (v2.0):** the JWT is stored in an **httpOnly, Secure, SameSite=Lax cookie**. Page scripts cannot read it (protection against XSS), and because frontend and API share one origin the browser sends it automatically.
+### 9.1 Frontend in v2.0
+
+**Its place does not change.** The frontend stays a client of the public REST API, served by nginx on the same origin. It sees endpoints, not the backend's `core` and services (§6): one page may use endpoints of several services, and when a result needs several parts, the backend combines them. The types for the new endpoints are generated from `openapi.json` like today, so the CI check covers them automatically.
+
+| Page | Calls | Answered by |
+|------|-------|-------------|
+| Search (v1.0) + "popular" chips | `/weather/*`, `/locations/*`, `/stats/popular` | weather, stats |
+| Places list (v1.0) | `/locations/search` | weather |
+| Login, register, user menu | `/auth/*`, `GET /me` | core/auth |
+| Preferences | `PATCH /me/preferences` | core/auth |
+| Dashboard, "save place" | `/me/dashboard`, `/me/places` | weather |
+| Trips, trip editor, trip forecast | `/me/trips/*` | trips (asks weather for each stop) |
+| Statistics | `/stats/popular`, `/me/stats` | stats |
+
+- **The UI does not feed the statistics.** A search is an ordinary weather call; the backend publishes `LocationSearched` itself. The UI only reads `/stats/*`.
+- **Login.** The JWT is stored in an **httpOnly, Secure, SameSite=Lax cookie**. Page scripts cannot read it (protection against XSS), and because frontend and API share one origin the browser sends it automatically. On start the app calls `GET /me` and keeps the answer (the user or "guest") in a Pinia store. Routes that need login carry `meta: { requiresAuth: true }`; a router guard sends guests to `/login?next=<page>`, and after login the user returns there. Any `401` from the API clears the store and does the same redirect, so an expired session never leaves a half-working page.
+- **Preferences.** A guest's language and units stay in `localStorage`, as in v1.0. After login, the saved preferences from `GET /me` take over, and every change is sent with `PATCH /me/preferences`, so they follow the user to another device.
+
+**Code grouped by feature.** With six more pages, folders by type (`pages/`, `components/`, ...) mix every feature together. From Phase 7 the code is grouped like the backend:
+
+```
+frontend/src/
+├── shared/          # api client + generated types, i18n, router, common components (ErrorBanner, LanguageSelect, UnitsToggle)
+└── features/
+    ├── weather/     # search, places list, dashboard, "save place"
+    ├── auth/        # login, register, preferences, the user store
+    ├── trips/       # trip list, editor, trip forecast
+    └── stats/       # statistics page, "popular" chips
+```
+
+Each feature folder holds its own `pages/`, `components/` and `composables/`; its tests are in `frontend/tests/<feature>/`. The rules mirror the backend: every feature may use `shared`, and `shared` imports no feature. Features use each other only where a page shows another feature's part: `trips` uses `weather` components (a forecast card per stop), and the `weather` search page shows the `stats` "popular" chips. Any other import between features is forbidden. ESLint's built-in `no-restricted-imports`, configured per feature folder, fails `npm run lint` on a forbidden import, the frontend counterpart of import-linter.
 
 ---
 
@@ -642,9 +728,17 @@ weather_forecaster/
 ```
 ├── app/                          # core + services (layout in §6)
 ├── migrations/                   # Alembic, one history for all schemas
-├── tests/
-│   ├── core/                     # auth, events, db helpers
-│   └── services/{weather,trips,stats}/   # unit, api and integration tests per service
+├── frontend/src/                 # shared/ + features/{weather,auth,trips,stats}/ (§9.1)
+├── tests/                        # outside app/: never in the image, not bound by the import rules
+│   ├── conftest.py · doubles.py · logs.py · fixtures/   # shared by all tests
+│   ├── core/                     # cache (aside, RedisCache), http, logging, events, auth, db
+│   └── services/
+│       ├── weather/
+│       │   ├── unit/             # service logic, providers, cache keys
+│       │   ├── api/              # endpoints with fake upstreams
+│       │   └── integration/      # real Redis / Postgres
+│       ├── trips/                # same three folders
+│       └── stats/
 └── docker-compose.yml            # + db, db-test
 ```
 
@@ -686,6 +780,7 @@ All settings come from environment variables (`.env` locally, secrets manager in
 | End-to-end (optional) | browser through the `full` profile | Playwright | full stack |
 
 **Rules:**
+- **One `tests/` folder, grouped by part, then by kind** (§11): all tests of a service are in `tests/services/<service>/`, split into `unit/`, `api/` and `integration/`. Tests stay outside `app/`, so they never reach the API image, the import-linter contracts cover only production code, and the shared doubles and fixtures live in one place. `pytest tests/services/weather` runs everything for one service.
 - **No fakes of third-party infrastructure.** Redis and Postgres are tested for real; test doubles exist only for *our own* interfaces.
 - **No test calls an external API.** Open-Meteo and GeoNames are always mocked.
 - **Integration tests fail when their container is not running**, with a hint how to start it. A green run always means the real infrastructure was used.
