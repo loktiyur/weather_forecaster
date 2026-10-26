@@ -114,7 +114,7 @@ origin and no CORS setup is needed (another backend: `API_PROXY_TARGET=http://lo
 ### The API contract
 
 The frontend's TypeScript types are **generated** from the backend's OpenAPI schema
-(`frontend/openapi.json` → `frontend/src/api/schema.d.ts`). After changing an API model or endpoint:
+(`frontend/openapi.json` → `frontend/src/shared/api/schema.d.ts`). After changing an API model or endpoint:
 
 ```bash
 poetry run poe generate-api      # export the schema and regenerate the types
@@ -301,6 +301,7 @@ Individual tasks:
 poetry run poe lint              # ruff check
 poetry run poe format-check      # ruff format --check (changes nothing)
 poetry run poe typecheck         # mypy, strict
+poetry run poe architecture      # dependency rules between core and services (import-linter)
 poetry run poe test-unit         # unit + API tests, no Docker needed
 poetry run poe test-integration  # tests against the real redis-test container
 poetry run poe test              # all tests; extra args pass through: poe test -k geocode -v
@@ -312,7 +313,7 @@ poetry run poe --help            # list all tasks
 
 - **Unit + API tests** never need infrastructure: external APIs are mocked with respx and the cache
   is a small in-memory test double of our own `Cache` interface.
-- **Integration tests** (`@pytest.mark.integration`, in `tests/integration/`) run against a real Redis
+- **Integration tests** (`@pytest.mark.integration`, in the `integration/` folders and `tests/core/cache/`) run against a real Redis
   in Docker. **The `redis-test` container must be running, otherwise these tests fail**
   (with a message telling you how to start it):
   ```bash
@@ -330,7 +331,7 @@ poetry run poe --help            # list all tasks
 | Job | Steps | On a pull request, runs when it changes |
 |-----|-------|-----------------------------------------|
 | `Changes` | decides which jobs a pull request needs | always |
-| `Lint, type-check, test` | lint, format check, mypy, unit + API tests | `app/`, `tests/`, `scripts/`, Poetry files, `*.md` (ruff checks the Python examples in Markdown) |
+| `Lint, type-check, test` | lint, format check, mypy, dependency rules (`Architecture`), unit + API tests | `app/`, `tests/`, `scripts/`, Poetry files, `*.md` (ruff checks the Python examples in Markdown) |
 | `Redis integration` | starts `redis:7.4-alpine` as a service container, runs the integration tests, then all tests with the coverage gate | `app/`, `tests/`, Poetry files |
 | `Docker image` | builds the API and web images, starts the full stack with Compose, runs `scripts/smoke_test.sh` against both | `app/`, `frontend/`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `scripts/smoke_test.sh`, Poetry files |
 | `Frontend` | API types match the backend, ESLint, Prettier, vue-tsc, Vitest, production build | `frontend/`, `app/` (a backend change can change the API contract), `scripts/export_openapi.py` |

@@ -2,7 +2,7 @@
 
 Our own log calls and those of the libraries (uvicorn, httpx, `logging.getLogger` in our
 modules) go through the same processors, so every line has the same fields, and every line
-written during a request carries its id (bound in `app/api/middleware.py`).
+written during a request carries its id (bound in `app/core/middleware.py`).
 """
 
 import logging

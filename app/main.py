@@ -5,16 +5,19 @@ from urllib.parse import urlsplit
 import structlog
 from fastapi import APIRouter, FastAPI
 
-from app.api.errors import register_exception_handlers
-from app.api.middleware import RequestContextMiddleware
-from app.api.routes import health, locations, weather
-from app.cache.redis_cache import RedisCache, create_redis_client
-from app.clients.factory import create_geocoding_client
-from app.clients.http import create_http_client
-from app.clients.open_meteo_weather import OpenMeteoWeatherClient
-from app.config import Settings, get_settings
+from app.core import errors
+from app.core.cache.redis import RedisCache, create_redis_client
+from app.core.config import Settings, get_settings
+from app.core.health import router as health_router
+from app.core.http import create_http_client
 from app.core.logging import configure_logging
-from app.services.weather_service import CacheTtls, WeatherService
+from app.core.middleware import RequestContextMiddleware
+from app.services.weather import errors as weather_errors
+from app.services.weather.cache_keys import CacheTtls
+from app.services.weather.providers.factory import create_geocoding_client
+from app.services.weather.providers.open_meteo_weather import OpenMeteoWeatherClient
+from app.services.weather.router import router as weather_router
+from app.services.weather.service import WeatherService
 
 log = structlog.get_logger(__name__)
 
@@ -29,10 +32,14 @@ TAGS_METADATA = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Create long-lived resources on startup and close them on shutdown."""
+    """Create long-lived resources on startup and close them on shutdown.
+
+    The one place that wires `core` and the services together (the composition root).
+    """
     settings: Settings = app.state.settings
     redis_client = create_redis_client(settings)
     cache = RedisCache(redis_client)
+    app.state.cache = cache
     if not await cache.ping():
         # Not fatal: the app works without the cache and reconnects when Redis is back.
         log.warning("redis_unreachable", redis=_without_credentials(settings.redis_url))
@@ -70,14 +77,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
-    register_exception_handlers(app)
+    errors.register_exception_handlers(app)
+    weather_errors.register_exception_handlers(app)
     app.add_middleware(RequestContextMiddleware)
 
     api_v1 = APIRouter(prefix=API_V1_PREFIX)
-    api_v1.include_router(weather.router)
-    api_v1.include_router(locations.router)
+    api_v1.include_router(weather_router)
     app.include_router(api_v1)
-    app.include_router(health.router)
+    app.include_router(health_router)
     return app
 
 

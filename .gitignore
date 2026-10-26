@@ -6,6 +6,7 @@ venv/
 
 # Tooling caches
 .pytest_cache/
+.import_linter_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage

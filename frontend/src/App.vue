@@ -2,7 +2,7 @@
 import { I18nT, useI18n } from 'vue-i18n'
 import { RouterView } from 'vue-router'
 
-import LanguageSelect from '@/components/LanguageSelect.vue'
+import LanguageSelect from '@/shared/components/LanguageSelect.vue'
 
 const { t } = useI18n()
 </script>

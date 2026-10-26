@@ -90,6 +90,10 @@ jobs:
       - name: Type check
         run: poetry run poe typecheck
 
+      # Dependency rules between core and services (import-linter contracts in pyproject.toml)
+      - name: Architecture
+        run: poetry run poe architecture
+
       - name: Unit + API tests
         run: poetry run poe test-unit
 
@@ -216,7 +220,7 @@ jobs:
         run: |
           PYTHONPATH=. poetry run python scripts/export_openapi.py frontend/openapi.json
           npm --prefix frontend run generate:api
-          git diff --exit-code -- frontend/openapi.json frontend/src/api/schema.d.ts \
+          git diff --exit-code -- frontend/openapi.json frontend/src/shared/api/schema.d.ts \
             || { echo "::error::The API changed. Run 'poetry run poe generate-api' and commit the result."; exit 1; }
 
       - name: Lint

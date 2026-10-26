@@ -17,7 +17,7 @@
     "format:check": "prettier --check src tests",
     "test": "vitest run",
     "test:watch": "vitest",
-    "generate:api": "openapi-typescript ./openapi.json --output ./src/api/schema.d.ts",
+    "generate:api": "openapi-typescript ./openapi.json --output ./src/shared/api/schema.d.ts",
     "check": "npm run lint && npm run format:check && npm run type-check && npm run test"
   },
   "dependencies": {

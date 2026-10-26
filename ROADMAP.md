@@ -191,14 +191,15 @@ Branch: `phase-7-restructure`
 
 The code moves into the structure from ARCHITECTURE.md §6. **No behaviour change**: the existing tests prove the move is safe, and the API contract (OpenAPI schema) stays identical.
 
-- [ ] `app/core/`: config, HTTP client + `get_json`, errors, shared exceptions
-- [ ] `app/core/cache/`: `Cache` interface, `RedisCache` (the only module importing `redis`), and `get_or_load()`, the cache-aside logic moved out of `WeatherService` (a cache failure counts as a miss)
-- [ ] `app/services/weather/`: router, service, schemas, `cache_keys.py` (key formats and TTLs: weather decisions, not core's), `providers/` (renamed from `clients/`: Open-Meteo, GeoNames)
-- [ ] Tests mirror the new layout in the top-level `tests/` (ARCHITECTURE §11, §13): `tests/core/...` and `tests/services/<service>/{unit,api,integration}/`; shared `conftest.py`, `doubles.py`, `logs.py` and `fixtures/` stay at the top. Tests are not moved into `app/`: they would ship in the image and fall under the import rules
-- [ ] Dependency rules written down as import-linter contracts in `pyproject.toml` (services → core only; no imports from core into services; `redis` imported only in `core/cache/redis.py`)
+- [x] `app/core/`: config, HTTP client + `get_json`, errors, shared exceptions
+- [x] `app/core/cache/`: `Cache` interface, `RedisCache` (the only module importing `redis`), and `get_or_load()`, the cache-aside logic moved out of `WeatherService` (a cache failure counts as a miss)
+- [x] `app/services/weather/`: router, service, schemas, `cache_keys.py` (key formats and TTLs: weather decisions, not core's), `providers/` (renamed from `clients/`: Open-Meteo, GeoNames)
+- [x] `/health` and `/health/ready` in `app/core/health.py`: readiness asks the cache directly instead of going through `WeatherService`
+- [x] Tests mirror the new layout in the top-level `tests/` (ARCHITECTURE §11, §13): `tests/core/...` and `tests/services/<service>/{unit,api,integration}/`; shared `conftest.py`, `doubles.py`, `logs.py` and `fixtures/` stay at the top. Tests are not moved into `app/`: they would ship in the image and fall under the import rules
+- [x] Dependency rules written down as import-linter contracts in `pyproject.toml` (no imports from core into services or `main`; `redis` imported only in `core/cache/redis.py`); `poe architecture`. The contracts for trips and stats come with those services
 
-- [ ] Frontend grouped by feature (ARCHITECTURE.md §9.1): `src/shared/` (API client, i18n, router, common components) and `src/features/weather/`; tests in `frontend/tests/<feature>/`. Folders for `auth`, `trips` and `stats` come with their phases
-- [ ] Frontend import rules with ESLint's `no-restricted-imports`: features use `shared`, `shared` imports no feature, features import each other only where allowed (`trips` → `weather`, `weather` → `stats`)
+- [x] Frontend grouped by feature (ARCHITECTURE.md §9.1): `src/shared/` (API client, i18n, common components) and `src/features/weather/`; `main.ts`, `App.vue` and `router.ts` stay at the top as the app shell; tests in `frontend/tests/<feature>/`. Folders for `auth`, `trips` and `stats` come with their phases
+- [x] Frontend import rules with ESLint's `no-restricted-imports`: features use `shared`, `shared` imports no feature, features import each other only where allowed (`ALLOWED_FEATURE_IMPORTS`: `trips` → `weather`, `weather` → `stats` are added with those features); `../` imports across folders are errors
 
 **CI additions:** new step `Architecture` (`lint-imports`) in the `Lint, type-check, test` job; the frontend import rules run in the `Frontend` job's existing lint step. The `Frontend` job's "API types up to date" check proves the contract did not change.
 

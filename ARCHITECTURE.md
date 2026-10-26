@@ -217,30 +217,47 @@ Both apps run on the host and reload on save; Docker runs only the infrastructur
 
 ---
 
-## 5. Backend today (v1.0)
+## 5. Backend today (after Phase 7)
+
+The §6 layout with only the parts that exist so far. `core/db.py`, `core/events.py`, `core/auth/` and the `trips` and `stats` services are added in the phases that need them (ROADMAP.md).
 
 ```
 app/
-├── main.py          # create_app(), lifespan: HTTP client, Redis, WeatherService
-├── config.py        # Settings
-├── api/             # routes, query models, error handlers, dependencies, request middleware
-├── services/        # WeatherService: cache-aside, geocode → weather
-├── clients/         # Open-Meteo / GeoNames clients, shared get_json (with retries)
-├── cache/           # Cache interface, RedisCache, key layout
-├── schemas/         # Pydantic models: API contract
-└── core/            # domain exceptions, WMO weather codes, logging setup
+├── main.py                  # composition root: the lifespan creates the HTTP client, Redis and
+│                            #   WeatherService; includes the routers
+├── core/                    # infrastructure, no features
+│   ├── config.py            # Settings
+│   ├── cache/               # base.py (Cache), redis.py (RedisCache), aside.py (get_or_load)
+│   ├── http.py              # shared httpx client + get_json (with retries)
+│   ├── errors.py            # the error format, shared exception handlers, error_docs()
+│   ├── exceptions.py        # shared exceptions (upstream failures)
+│   ├── health.py            # /health, /health/ready (asks the cache directly)
+│   ├── language.py          # Language: en / uk / cs / ru
+│   ├── logging.py           # structlog setup
+│   └── middleware.py        # request id + access log
+└── services/
+    └── weather/
+        ├── router.py        # /weather/*, /locations/*
+        ├── queries.py       # query parameter models
+        ├── dependencies.py  # WeatherServiceDep
+        ├── service.py       # WeatherService: geocode → weather, through the cache
+        ├── cache_keys.py    # key layout and TTLs
+        ├── errors.py        # CityNotFoundError, NotACityError, ... and their HTTP mapping
+        ├── schemas.py       # Location and weather models: the API contract
+        ├── weather_codes.py # WMO codes in four languages
+        └── providers/       # Open-Meteo and GeoNames clients
 ```
 
 | Layer | Knows about | Does **not** know about |
 |-------|-------------|-------------------------|
-| **API** (`app/api`) | HTTP: paths, query params, status codes, headers | Upstream URLs, Redis |
-| **Service** (`app/services`) | The flow: cache → geocode → cache → weather | HTTP requests/responses |
-| **Clients** (`app/clients`) | One external API each: URL, params, JSON → model | Caching, callers |
-| **Cache** (`app/cache`) | Key layout, Redis commands, expiry on write | Which data is cached for how long |
+| **Router** (`router.py`, `queries.py`) | HTTP: paths, query params, status codes, headers | Upstream URLs, Redis |
+| **Service** (`service.py`, `cache_keys.py`) | The flow: cache → geocode → cache → weather; what is cached for how long | HTTP requests/responses |
+| **Providers** (`providers/`) | One external API each: URL, params, JSON → model | Caching, callers |
+| **Cache** (`core/cache`) | Redis commands, expiry on write, cache-aside | Which data is cached for how long |
 
 Every dependency (HTTP client, Redis, settings, the service) is created once in the FastAPI **lifespan** and injected with `Depends(...)`, so tests can replace any of them. `WeatherService` depends on interfaces (`GeocodingClient`, `WeatherClient`, `Cache`), not on concrete classes.
 
-This layout is right for one feature. Phase 7 restructures it for v2.0 (§6) without changing behaviour.
+Until Phase 7 the code was grouped by kind (`api/`, `clients/`, `cache/`, `schemas/`); the move changed no behaviour, and the OpenAPI schema stayed byte-for-byte the same.
 
 ---
 
@@ -251,13 +268,17 @@ app/
 ├── main.py                  # creates the app, includes the routers of core/auth and the 3 services
 ├── core/                    # infrastructure only: no features
 │   ├── config.py            # Settings
+│   ├── language.py          # Language: en / uk / cs / ru
 │   ├── db.py                # Postgres: async engine, session dependency, Base
 │   ├── cache/               # caching mechanism only: knows nothing about weather
 │   │   ├── base.py          #   Cache interface (get/set/ping), CacheUnavailableError
 │   │   ├── redis.py         #   RedisCache: the only module that imports redis
 │   │   └── aside.py         #   get_or_load(): generic cache-aside, a cache failure = a miss
 │   ├── http.py              # shared httpx client + get_json
-│   ├── errors.py            # unified error format, exception handlers
+│   ├── errors.py            # unified error format, shared exception handlers
+│   ├── exceptions.py        # shared exceptions (upstream failures)
+│   ├── health.py            # /health, /health/ready
+│   ├── logging.py · middleware.py   # structlog setup; request id + access log
 │   ├── events.py            # tiny in-process publish/subscribe
 │   └── auth/                # users, register/login, JWT cookie, current_user dependency
 │
@@ -266,6 +287,7 @@ app/
     │   ├── router.py        #    /weather/*, /locations/*, /me/places, /me/dashboard
     │   ├── service.py       #    WeatherService: what to cache, via core/cache get_or_load()
     │   ├── cache_keys.py    #    geo:/place:/weather: keys and their TTLs
+    │   ├── errors.py        #    its exceptions and their HTTP mapping
     │   ├── places.py        #    "My places" + dashboard
     │   ├── providers/       #    Open-Meteo, GeoNames (renamed from clients/)
     │   ├── repository.py    #    SQL: locations, favourite_places
@@ -526,16 +548,23 @@ A **separate application in the same repository** (`frontend/`), not part of the
 frontend/
 ├── openapi.json             # the backend's OpenAPI schema (exported by scripts/export_openapi.py)
 ├── src/
-│   ├── api/
-│   │   ├── schema.d.ts      # GENERATED from openapi.json, never edited by hand
-│   │   └── client.ts        # typed openapi-fetch client; failures become ApiError(code)
-│   ├── pages/               # SearchPage, PlacesPage
-│   ├── components/          # CurrentWeatherCard, ForecastList, SearchForm, UnitsToggle, LanguageSelect, ErrorBanner
-│   ├── composables/         # useWeatherLookup (parallel requests, stale-answer guard), useUnits
-│   ├── weather/             # display helpers (icons, local times, dates), place links
-│   ├── i18n/                # vue-i18n setup, plural rules, language detection; locales/{en,uk,cs,ru}.json
-│   └── router.ts
-├── tests/                   # Vitest: client, helpers, i18n (keys, plurals), the pages
+│   ├── main.ts · App.vue · router.ts   # the app shell: assembles the features (§9.1)
+│   ├── shared/              # used by every feature
+│   │   ├── api/
+│   │   │   ├── schema.d.ts  # GENERATED from openapi.json, never edited by hand
+│   │   │   └── client.ts    # typed openapi-fetch client; failures become ApiError(code)
+│   │   ├── i18n/            # vue-i18n setup, plural rules, language detection; locales/{en,uk,cs,ru}.json
+│   │   ├── components/      # ErrorBanner, LanguageSelect, UnitsToggle
+│   │   ├── composables/     # useUnits
+│   │   ├── query.ts         # reading values from the URL query
+│   │   └── styles/
+│   └── features/
+│       └── weather/
+│           ├── pages/       # SearchPage, PlacesPage
+│           ├── components/  # CurrentWeatherCard, ForecastList, SearchForm
+│           ├── composables/ # useWeatherLookup (parallel requests, stale-answer guard)
+│           └── format.ts · places.ts   # display helpers (icons, local times, dates), place links
+├── tests/                   # Vitest: shared/ (client, i18n, units), weather/ (helpers, the pages)
 ├── Dockerfile               # Node build stage → unprivileged nginx runtime stage
 ├── nginx.conf               # serve the app, proxy /api, /health, /docs to the api service
 ├── vite.config.ts           # dev proxy /api → http://localhost:8000
@@ -552,7 +581,7 @@ frontend/
 
 **Languages (v1.0):** the interface speaks English, Ukrainian, Czech and Russian.
 - The frontend uses **vue-i18n**. Messages live in `src/i18n/locales/{en,uk,cs,ru}.json`; `en.json` defines their type, so a key missing in another language fails `vue-tsc`, and a test compares the key sets. Plural forms follow each language (1 місце, 2 місця, 5 місць). The choice is remembered in `localStorage`; the first default is the browser's language.
-- Every API call sends `lang`. The backend returns place names, weather descriptions (`app/core/weather_codes.py`, one tuple of four texts per code, so mypy rejects a missing language) and unit labels (`км/год`) in that language. Error messages stay English: they are for developers, and the frontend shows its own text per error code.
+- Every API call sends `lang`. The backend returns place names, weather descriptions (`app/services/weather/weather_codes.py`, one tuple of four texts per code, so mypy rejects a missing language) and unit labels (`км/год`) in that language. Error messages stay English: they are for developers, and the frontend shows its own text per error code.
 - **Names in any alphabet.** The geocoder matches a name only in the search language: "Київ" with `language=en` finds nothing, "Киев" with `language=uk` finds a village in Russia, and "Germany" with `language=ru` misses the country. So a result counts only when its best match is exactly the typed name; otherwise the name is retried in the other languages of the same alphabet (Ukrainian and Russian for Cyrillic, English and Czech for Latin). Places found that way are fetched again by id in the interface language, so typing "Київ" with an English interface shows "Kyiv, Ukraine". This logic lives in the `GeocodingClient` base class, so every provider gets it.
 
 | | Development | Full stack / production |
@@ -583,7 +612,8 @@ frontend/
 
 ```
 frontend/src/
-├── shared/          # api client + generated types, i18n, router, common components (ErrorBanner, LanguageSelect, UnitsToggle)
+├── main.ts · App.vue · router.ts   # the app shell: the only code that imports every feature
+├── shared/          # api client + generated types, i18n, common components (ErrorBanner, LanguageSelect, UnitsToggle)
 └── features/
     ├── weather/     # search, places list, dashboard, "save place"
     ├── auth/        # login, register, preferences, the user store
@@ -591,7 +621,7 @@ frontend/src/
     └── stats/       # statistics page, "popular" chips
 ```
 
-Each feature folder holds its own `pages/`, `components/` and `composables/`; its tests are in `frontend/tests/<feature>/`. The rules mirror the backend: every feature may use `shared`, and `shared` imports no feature. Features use each other only where a page shows another feature's part: `trips` uses `weather` components (a forecast card per stop), and the `weather` search page shows the `stats` "popular" chips. Any other import between features is forbidden. ESLint's built-in `no-restricted-imports`, configured per feature folder, fails `npm run lint` on a forbidden import, the frontend counterpart of import-linter.
+Each feature folder holds its own `pages/`, `components/` and `composables/`; its tests are in `frontend/tests/<feature>/`, the tests of `shared` in `frontend/tests/shared/`. The router lives in the app shell, not in `shared`: it imports the pages of every feature, like `main.py` in the backend. The rules mirror the backend: every feature may use `shared`, and `shared` imports no feature (nor the app shell). Features use each other only where a page shows another feature's part: `trips` uses `weather` components (a forecast card per stop), and the `weather` search page shows the `stats` "popular" chips. Any other import between features is forbidden. ESLint's built-in `no-restricted-imports`, configured per feature folder in `eslint.config.js`, fails `npm run lint` on a forbidden import, the frontend counterpart of import-linter. Every folder in `src/features/` gets the rules automatically; the allowed imports between features are one list there (`ALLOWED_FEATURE_IMPORTS`), extended by the phase that adds a feature. Imports across folders use `@/...` (a `../` import is an error), so every import says where it points.
 
 ---
 
@@ -689,11 +719,11 @@ Validation errors also list every invalid field:
 
 ### Retries and logs (v1.0)
 
-**Retries.** Every call to Open-Meteo goes through `get_json` (`app/clients/http.py`), which retries temporary failures with **tenacity**: timeouts, dropped connections, HTTP 5xx and 429. At most 3 attempts with exponential backoff and jitter (~0.2 s, ~0.4 s), and a time budget of 8 s, so a user never waits for three full timeouts. Other 4xx answers ("Location ID not found") would come back the same and are never retried. After the last attempt the error is the same as without retries (`UPSTREAM_ERROR` / `UPSTREAM_TIMEOUT`). GeoNames calls go through geopy and are not retried.
+**Retries.** Every call to Open-Meteo goes through `get_json` (`app/core/http.py`), which retries temporary failures with **tenacity**: timeouts, dropped connections, HTTP 5xx and 429. At most 3 attempts with exponential backoff and jitter (~0.2 s, ~0.4 s), and a time budget of 8 s, so a user never waits for three full timeouts. Other 4xx answers ("Location ID not found") would come back the same and are never retried. After the last attempt the error is the same as without retries (`UPSTREAM_ERROR` / `UPSTREAM_TIMEOUT`). GeoNames calls go through geopy and are not retried.
 
 **Logs.** `app/core/logging.py` configures **structlog** for our own log calls *and* for the standard library loggers of uvicorn and httpx, so every line has the same fields: `timestamp`, `level`, `logger`, `event` and any extra fields. Our code logs in one style only: `structlog.get_logger(__name__)` with a short event name and named fields (`log.warning("upstream_retry", service=..., attempt=2, status=503)`), so every detail is a field a log system can filter on, not words inside a sentence. Libraries keep their own message text; they reach the same handler through the standard library bridge. `LOG_FORMAT=json` (set in the API image) writes one JSON object per line for log systems; `text` writes readable lines for a terminal.
 
-**Request id.** `RequestContextMiddleware` (`app/api/middleware.py`, a plain ASGI middleware) gives each request an id. It keeps the caller's `X-Request-ID` if it looks like an id, otherwise it generates one. It binds the id with `structlog.contextvars`, so every line written while the request is handled carries `request_id`, and it returns the id in the response header. nginx creates the id for requests from the browser and writes it into its own access log, so one id connects the nginx line, the API's access line and its calls to Open-Meteo. The middleware also writes the access log (method, path, query, status, duration); uvicorn's own access log is switched off, and successful health checks are left out, because Docker calls them every 10 s.
+**Request id.** `RequestContextMiddleware` (`app/core/middleware.py`, a plain ASGI middleware) gives each request an id. It keeps the caller's `X-Request-ID` if it looks like an id, otherwise it generates one. It binds the id with `structlog.contextvars`, so every line written while the request is handled carries `request_id`, and it returns the id in the response header. nginx creates the id for requests from the browser and writes it into its own access log, so one id connects the nginx line, the API's access line and its calls to Open-Meteo. The middleware also writes the access log (method, path, query, status, duration); uvicorn's own access log is switched off, and successful health checks are left out, because Docker calls them every 10 s.
 
 ---
 
@@ -792,7 +822,7 @@ Pull requests run only the jobs whose files changed; pushes to `main` (every mer
 
 | Job | Steps | From |
 |-----|-------|------|
-| `Lint, type-check, test` | ruff, format check, mypy strict, unit + API tests · `Architecture` step (import-linter) from Phase 7 | Phase 0 |
+| `Lint, type-check, test` | ruff, format check, mypy strict, `Architecture` (import-linter, from Phase 7), unit + API tests | Phase 0 |
 | `Redis integration` | `redis:7.4-alpine` service container, integration tests | Phase 3 |
 | `Docker image` | build the `api` (and `web` from Phase 5) images, start the `full` profile, run `scripts/smoke_test.sh`: readiness, a real weather request, the cache hit, the error format (and the web page from Phase 5) | Phase 4 |
 | `Frontend` | generated API types match the backend code, ESLint, Prettier, `vue-tsc`, Vitest, build | Phase 5 |
