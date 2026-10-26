@@ -1,8 +1,8 @@
-"""Test doubles for our own `Cache` interface. Real Redis is tested in tests/integration/."""
+"""Test doubles for our own `Cache` interface. Real Redis is tested by the integration tests."""
 
 from dataclasses import dataclass, field
 
-from app.cache.base import CacheUnavailableError
+from app.core.cache.base import CacheUnavailableError
 
 
 @dataclass

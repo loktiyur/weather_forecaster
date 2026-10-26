@@ -3,7 +3,7 @@ import type {
   DailyForecastDay,
   ForecastResponse,
   Location,
-} from '@/api/client'
+} from '@/shared/api/client'
 
 export const PRAGUE: Location = {
   id: 3067696,

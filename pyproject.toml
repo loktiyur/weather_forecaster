@@ -27,6 +27,7 @@ dev = [
     "respx (>=0.23.1,<0.24.0)",
     "pytest-cov (>=7.1.0,<8.0.0)",
     "poethepoet (>=0.49.0,<0.50.0)",
+    "import-linter (>=2.15,<3.0)",
 ]
 
 [tool.poetry]
@@ -50,7 +51,7 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 # Translations: Cyrillic letters that look like Latin ones ("с") are intended there.
-"app/core/weather_codes.py" = ["RUF001"]
+"app/services/weather/weather_codes.py" = ["RUF001"]
 "tests/**" = ["RUF001"]
 
 [tool.mypy]
@@ -63,6 +64,25 @@ plugins = ["pydantic.mypy"]
 # geopy ships without type hints
 module = ["geopy", "geopy.*"]
 ignore_missing_imports = true
+
+# Dependency rules (ARCHITECTURE.md §6), checked by `poe architecture` and the CI step
+# `Architecture`. Rules for trips and stats are added in the phases that create them.
+[tool.importlinter]
+root_package = "app"
+include_external_packages = true  # so the `redis` rule can see the redis package
+
+[[tool.importlinter.contracts]]
+name = "core never imports a service"
+type = "forbidden"
+source_modules = ["app.core"]
+forbidden_modules = ["app.services", "app.main"]
+
+[[tool.importlinter.contracts]]
+name = "only core/cache/redis.py imports redis"
+type = "forbidden"
+source_modules = ["app"]
+forbidden_modules = ["redis"]
+ignore_imports = ["app.core.cache.redis -> redis"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -94,11 +114,12 @@ format-code = { sequence = [
 lint = { cmd = "ruff check .", help = "Lint" }
 format-check = { cmd = "ruff format --check .", help = "Check formatting without changing files" }
 typecheck = { cmd = "mypy", help = "Static type checking (strict)" }
+architecture = { cmd = "lint-imports", help = "Check the dependency rules between core and services (import-linter)" }
 test = { cmd = "pytest", help = "Run all tests; extra args are passed through, e.g. poe test -k geocode" }
 test-unit = { cmd = "pytest -m 'not integration'", help = "Unit + API tests, no infrastructure needed" }
 test-integration = { cmd = "pytest -m integration", help = "Tests against real Redis (docker compose up -d redis-test)" }
 test-cov = { cmd = "pytest -v --cov", help = "Run all tests with the 80 % coverage gate" }
-check = { sequence = ["lint", "format-check", "typecheck", "test-cov"], help = "Everything CI runs" }
+check = { sequence = ["lint", "format-check", "typecheck", "architecture", "test-cov"], help = "Everything CI runs" }
 smoke-test = { cmd = "bash scripts/smoke_test.sh", help = "Smoke-test a running stack: poe smoke-test [API_URL] [WEB_URL], e.g. after docker compose --profile full up" }
 export-openapi = { cmd = "python scripts/export_openapi.py frontend/openapi.json", env = { PYTHONPATH = "." }, help = "Write the API's OpenAPI schema to frontend/openapi.json" }
 generate-api = { sequence = [

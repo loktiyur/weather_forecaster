@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory, type RouterHistory } from 'vue-router'
 
-import PlacesPage from '@/pages/PlacesPage.vue'
-import SearchPage from '@/pages/SearchPage.vue'
+import PlacesPage from '@/features/weather/pages/PlacesPage.vue'
+import SearchPage from '@/features/weather/pages/SearchPage.vue'
 
 export function createAppRouter(history: RouterHistory = createWebHistory()) {
   return createRouter({
