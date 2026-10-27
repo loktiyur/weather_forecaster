@@ -23,7 +23,7 @@ Only Docker is needed:
 
 ```bash
 git clone git@github.com:loktiyur/weather_forecaster.git && cd weather_forecaster
-docker compose --profile full up -d --build     # builds and starts web, api and redis
+docker compose --profile full up -d --build     # builds and starts web, api, redis and db
 open http://localhost:8080                      # the app (API docs: http://localhost:8080/docs)
 docker compose --profile full down              # stop everything
 ```
@@ -37,7 +37,7 @@ Released versions can also run from the published images, without building:
 - Python 3.12
 - [Poetry](https://python-poetry.org/) 2.x (`brew install poetry` on macOS)
 - Node.js 24+ and npm (for the web frontend)
-- Docker with Docker Compose (for Redis, and to run the whole app in containers)
+- Docker with Docker Compose (for Redis and PostgreSQL, and to run the whole app in containers)
 
 ## Setup
 
@@ -53,7 +53,7 @@ npm --prefix frontend ci          # install the frontend dependencies
 | | Development | Full stack |
 |---|---|---|
 | App runs | on your machine: API with `uvicorn --reload`, frontend with `npm run dev` (both reload on every change) | in the `api` and `web` containers (the images that get deployed) |
-| Docker runs | Redis only | Redis + API + web |
+| Docker runs | Redis and PostgreSQL only | Redis + PostgreSQL + API + web |
 | Open | http://localhost:5173 | http://localhost:8080 |
 | Use it for | writing code, debugging | checking the real images, demos |
 
@@ -62,15 +62,27 @@ npm --prefix frontend ci          # install the frontend dependencies
 In development Docker Compose runs only the infrastructure; the app runs on your machine.
 
 ```bash
-docker compose up -d       # start Redis (dev, port 6379) and redis-test (port 6380)
-docker compose ps          # both should be "healthy"
-docker compose down        # stop them (the dev cache survives in a volume)
+docker compose up -d       # start redis, redis-test, db and db-test
+docker compose ps          # all four should be "healthy"
+docker compose down        # stop them (the dev cache and the dev database survive in volumes)
 ```
 
 | Service | Port | Used by |
 |---------|------|---------|
 | `redis` | 6379 | the app (`REDIS_URL`), keeps its data across restarts |
 | `redis-test` | 6380 | integration tests only, emptied by every test, nothing saved to disk |
+| `db` | 5432 | the app (`DATABASE_URL`), PostgreSQL 16, keeps its data in the `db-data` volume |
+| `db-test` | 5433 | integration tests only (database `weather_app_test`), kept in memory: empty after every start |
+
+Both databases use the user and password `weather` / `weather`. They are local containers only;
+nothing else uses these credentials. To open a SQL shell:
+
+```bash
+docker compose exec db psql -U weather -d weather_app
+```
+
+`docker compose down -v` also deletes the volumes, so the next start begins with an empty cache and
+an empty database.
 
 Without Redis the app still works: every request calls the weather APIs, a warning is logged and `/health/ready` returns `503`.
 
@@ -138,7 +150,7 @@ npm run build        # production build into dist/
 ## Run the full stack in Docker
 
 ```bash
-docker compose --profile full up -d --build    # build the images, start web + api + redis
+docker compose --profile full up -d --build    # build the images, start web + api + redis + db
 docker compose --profile full ps               # api and web should be "healthy"
 open http://localhost:8080                     # the app
 poetry run poe smoke-test http://localhost:8000 http://localhost:8080   # end-to-end check
@@ -153,7 +165,8 @@ docker compose --profile full down             # stop everything
 
 - Without `--profile full`, `docker compose up` still starts only the infrastructure.
 - The container reads optional settings from `.env` (e.g. `GEOCODING_PROVIDER`), but always uses
-  `REDIS_URL=redis://redis:6379/0`, the Redis container's name inside the Compose network.
+  `REDIS_URL=redis://redis:6379/0` and `DATABASE_URL=…@db:5432/weather_app`: the container names
+  inside the Compose network. The API starts only once Redis and PostgreSQL are healthy.
 - Both images run as non-root users. The API image contains only `app/` and its runtime dependencies;
   the web image only nginx and the built files. Both `.dockerignore` files are allow-lists, so tests,
   `.env` or `node_modules` cannot slip in.

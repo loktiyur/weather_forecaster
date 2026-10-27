@@ -38,6 +38,44 @@ services:
       timeout: 3s
       retries: 5
 
+  # PostgreSQL for local development. Data survives restarts in a volume.
+  # The credentials are for this local container only; nothing else uses them.
+  db:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: weather
+      POSTGRES_PASSWORD: weather
+      POSTGRES_DB: weather_app
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      # -h 127.0.0.1: during its first start the image runs a temporary server on the Unix
+      # socket only, so a check over TCP is healthy only once the real server is up.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "weather", "-d", "weather_app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Separate instance for integration tests: tests empty it, so it must never be the dev database.
+  db-test:
+    image: postgres:16-alpine
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: weather
+      POSTGRES_PASSWORD: weather
+      POSTGRES_DB: weather_app_test
+    # In memory: every start is empty, and tests run faster without disk writes.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "weather", "-d", "weather_app_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # The API image (Dockerfile). Only started with the `full` profile.
   api:
     profiles: ["full"]
@@ -46,14 +84,17 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"   # API_PORT=8001 if the dev server already uses 8000
     # Optional .env for settings like GEOCODING_PROVIDER; `environment` below wins over it,
-    # so a REDIS_URL meant for the host (localhost) can never leak into the container.
+    # so a REDIS_URL or DATABASE_URL meant for the host (localhost) can never leak into the container.
     env_file:
       - path: .env
         required: false
     environment:
       REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://weather:weather@db:5432/weather_app
     depends_on:
       redis:
+        condition: service_healthy
+      db:
         condition: service_healthy
     restart: unless-stopped
 
@@ -72,3 +113,4 @@ services:
 
 volumes:
   redis-data:
+  db-data:

@@ -206,20 +206,42 @@ The code moves into the structure from ARCHITECTURE.md §6. **No behaviour chang
 ---
 
 ## Phase 8 — PostgreSQL foundation
-Branch: `phase-8-postgres`
 
-- [ ] `db` (dev, port 5432, persistent volume) and `db-test` (port 5433, tmpfs) as `postgres:16-alpine` in `docker-compose.yml`; `api` in the `full` profile depends on `db`
-- [ ] `app/core/db.py`: SQLAlchemy 2.0 async engine + session dependency (`asyncpg`)
-- [ ] Alembic with async support; one schema per service (ARCHITECTURE.md §8); first migration creates schema `weather`
-- [ ] `weather.locations`: places stored once, keyed by the GeoNames id the API already returns as `location.id` (Phase 5), upserted from geocoding results (`INSERT … ON CONFLICT`)
-- [ ] `GET /api/v1/locations/{id}`; lookups by id are served from the table before asking the provider
+Four pull requests, each small enough to review on its own and each leaving `main` working. Every PR brings the tests for its own code. Indexes are added in the phase whose queries need them (Phase 10: time windows of `search_events`; Phase 11: `trips(user_id)` and the stop constraints), so each one has a query to justify it.
+
+### 8.1 — Postgres containers
+Branch: `phase-8.1-postgres-containers` · PR title `build: …` (no release)
+
+- [x] `db` (dev, port 5432, persistent volume) and `db-test` (port 5433, tmpfs) as `postgres:16-alpine` with healthchecks in `docker-compose.yml`; `api` in the `full` profile depends on `db`
+- [x] Setting `DATABASE_URL` (the API container gets `…@db:5432/weather_app`); `.env.example` and README updated. `TEST_DATABASE_URL` is read by the test fixture in 8.2, like `TEST_REDIS_URL`
+- [x] No Python code uses the database yet
+
+### 8.2 — SQLAlchemy async session
+Branch: `phase-8.2-db-session` · PR title `feat: …` (the readiness answer gains `postgres`: minor release)
+
+- [ ] `app/core/db.py`: SQLAlchemy 2.0 async engine (`asyncpg`), session dependency, `Base`; the engine is created in the lifespan and disposed on shutdown
 - [ ] `GET /health/ready` also checks Postgres
+- [ ] Integration tests against `db-test`: a fixture that fails (never skips) when the container is not running, like Redis; tests for the session and readiness; markers `redis` and `postgres` under `integration`
+
+**CI additions:** new job `Postgres integration`: `postgres:16-alpine` service container · Postgres integration tests
+
+### 8.3 — Alembic
+Branch: `phase-8.3-alembic` · PR title `build: …` (no release)
+
+- [ ] Alembic with async support; one schema per service (ARCHITECTURE.md §8); the first migration creates schema `weather` (still empty)
 - [ ] Migrations run on container start in the `full` profile
-- [ ] Integration tests against `db-test` (fail when it is not running, like Redis); markers `redis` and `postgres` under `integration`
+- [ ] Migration test on `db-test`: upgrade to head and downgrade to base
 
 **CI additions:**
-- new job `Postgres integration`: `postgres:16-alpine` service container · `alembic upgrade head` · `alembic check` (models and migrations in sync) · Postgres integration tests
-- coverage is combined: each test job uploads its coverage data, a `Coverage` job merges it and applies the 80 % gate
+- `Postgres integration` also runs `alembic upgrade head` and `alembic check` (models and migrations in sync)
+- coverage is combined: each test job uploads its coverage data, a `Coverage` job merges it and applies the 80 % gate (two integration jobs now: Redis and Postgres)
+
+### 8.4 — Places table
+Branch: `phase-8.4-locations-table` · PR title `feat: …` (minor release)
+
+- [ ] `weather.locations`: places stored once, keyed by the GeoNames id the API already returns as `location.id` (Phase 5), upserted from geocoding results (`INSERT … ON CONFLICT`); primary key on the id, `UNIQUE (provider_id)`
+- [ ] `GET /api/v1/locations/{id}`; lookups by id are served from the table before asking the provider
+- [ ] Integration tests for the repository (upsert, lookup by id)
 
 ---
 
@@ -259,8 +281,13 @@ Branch: `phase-10-stats`
 Branch: `phase-11-trips`
 
 - [ ] `app/services/trips/`: schema `trips`, tables `trips` and `trip_stops`
-- [ ] Constraints: `CHECK (end_date >= start_date)`, stops of one trip must not overlap (exclusion constraint, `btree_gist`), stop order unique per trip
-- [ ] Create a trip with its stops in one transaction; add / move / remove stops
+- [ ] `trip_stops`: `start_date` and `end_date` required (`NOT NULL`); `stop_order` orders the stops, also those on the same day (travel day, day trip); gaps in `stop_order` are allowed (removing a stop does not renumber the others) — ARCHITECTURE.md §8.2 "Trip stops"
+- [ ] Database constraints: `CHECK (end_date >= start_date)`; `UNIQUE (trip_id, stop_order) DEFERRABLE INITIALLY DEFERRED` (reordering in one transaction); stays of one trip share at most a boundary day (exclusion constraint on `daterange(start_date, end_date, '()')`, `btree_gist`); foreign keys `trip_stops.trip_id` `ON DELETE CASCADE`, `trips.user_id` `ON DELETE CASCADE`, `trip_stops.location_id` `ON DELETE RESTRICT`
+- [ ] Index `trips(user_id)` for "my trips"; `UNIQUE (trip_id, stop_order)` already serves "the stops of a trip, in order"
+- [ ] A trip has **at least two stops** (one place is a normal weather search, not a trip): `min_length=2` on the create request (`422`); removing a stop that would leave fewer than two → `409` with a hint to delete the trip instead
+- [ ] `TripService` checks across rows after every write, in the same transaction (one query with `lag(...) OVER (ORDER BY stop_order)`): the order agrees with the dates (each stop starts on or after the day the previous one ends), and **the same place is never twice in a row** (returning to it later, e.g. a day trip or a round trip, is allowed); violations → `409`
+- [ ] Create a trip with its stops in one transaction; add / move / remove stops; adding a stop locks the trip row (`SELECT … FOR UPDATE`) so two parallel adds cannot take the same `stop_order`
+- [ ] Every stop endpoint checks both parts of the URL: the stop belongs to the trip, and the trip belongs to the caller
 - [ ] `GET/POST/PATCH/DELETE /api/v1/me/trips…`, only the owner can see or change a trip
 - [ ] `GET /api/v1/me/trips/{id}/forecast`: the weather for each stop on its own dates, fetched concurrently through `WeatherService` (and its cache)
 - [ ] Stops more than 16 days ahead return "forecast available from <date>" instead of data

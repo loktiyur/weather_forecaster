@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # Short timeouts: if Redis hangs, requests fall back to the APIs instead of waiting.
     redis_timeout_seconds: float = 0.5
 
+    # The `db` container from docker-compose.yml (`docker compose up -d`).
+    database_url: str = "postgresql+asyncpg://weather:weather@localhost:5432/weather_app"
+
     cache_ttl_geocoding_seconds: int = 7 * 24 * 3600
     cache_ttl_current_seconds: int = 600
     cache_ttl_forecast_seconds: int = 3600
