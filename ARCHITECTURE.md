@@ -201,17 +201,17 @@ flowchart LR
     tests -. integration tests .-> redistest
 ```
 
-Both apps run on the host and reload on save; Docker runs only the infrastructure. From v2.0 Compose also runs `db` (port 5432) and `db-test` (port 5433).
+Both apps run on the host and reload on save; Docker runs only the infrastructure. From Phase 8.1 Compose also runs `db` (port 5432) and `db-test` (port 5433).
 
 ### Runtime setups
 
 | Setup | Command | Backend runs | Containers |
 |-------|---------|--------------|------------|
-| **Development** | `docker compose up -d` + `poetry run uvicorn app.main:app --reload` + `npm run dev` | On the host | `redis`, `redis-test` (+ `db`, `db-test` in v2.0) |
+| **Development** | `docker compose up -d` + `poetry run uvicorn app.main:app --reload` + `npm run dev` | On the host | `redis`, `redis-test`, `db`, `db-test` (the databases from Phase 8.1) |
 | **Unit + API tests** | `poetry run poe test-unit` | In-process (ASGI transport) | None |
 | **Integration tests** | `poetry run poe test-integration` | In-process | `redis-test` (+ `db-test` in v2.0); tests fail if they are not running |
 | **Frontend tests** | `npm run test` (in `frontend/`) | Not needed (API client mocked) | None |
-| **Full stack** | `docker compose --profile full up` | `api` container | `web`, `api`, `redis` (+ `db` in v2.0) |
+| **Full stack** | `docker compose --profile full up` | `api` container | `web`, `api`, `redis`, `db` (`db` from Phase 8.1) |
 | **CI** | GitHub Actions (§13) | In-process for tests; images built and smoke-tested | Service containers |
 | **Production** (optional) | Terraform + Cloud Run | Cloud Run | Managed Redis and Postgres |
 
@@ -511,9 +511,9 @@ erDiagram
         uuid id PK
         uuid trip_id FK
         bigint location_id FK
-        int position
-        date start_date
-        date end_date
+        int stop_order "1, 2, 3, ... within the trip"
+        date start_date "required"
+        date end_date "required"
     }
     STATS_SEARCH_EVENTS {
         bigint id PK
@@ -528,6 +528,28 @@ erDiagram
 
 (Mermaid cannot show schemas, so names are written as `SCHEMA_TABLE`: `AUTH_USERS` is `auth.users`.)
 
+**Trip stops.** A stop is a stay in one place from `start_date` to `end_date`, both days included. Both dates are required (`NOT NULL`): the trip forecast shows each stop's weather for exactly these days, so a stop without dates would have nothing to show. They are dates, not times, because the forecast is per day.
+
+`stop_order` (1, 2, 3, ...) is the order of the stops within the trip. The dates alone cannot give it, because several stops can fall on the same day: a travel day ends one stay and starts the next, and a day trip is a stop of its own.
+
+```
+stop_order  place        start_date  end_date
+1           Prague       1 May       3 May
+2           Kutná Hora   3 May       3 May    ← day trip on the travel day
+3           Vienna       3 May       5 May
+```
+
+All three contain 3 May, and only `stop_order` says Kutná Hora comes between Prague and Vienna. The rules:
+
+| Rule | Where | How |
+|------|-------|-----|
+| `end_date >= start_date` | database | `CHECK` |
+| Each number once per trip | database | `UNIQUE (trip_id, stop_order) DEFERRABLE INITIALLY DEFERRED`: reordering several stops in one transaction may pass through duplicates, only the result is checked |
+| Two stays share at most their first or last day | database | `EXCLUDE USING gist (trip_id WITH =, daterange(start_date, end_date, '()') WITH &&)` (`btree_gist`): the ranges without their boundary days must not overlap, so Prague 1–5 May and Vienna 3–7 May are rejected |
+| The order agrees with the dates: each stop starts on or after the day the previous one ends | `TripService` | a rule across rows, so it is checked when stops are written (and tested); a violation is `409` like the database rules |
+
+Together they mean a trip read in `stop_order` is always a valid itinerary, whichever endpoint changed it.
+
 ### 8.3 Design decisions
 
 | Decision | Choice | Reason |
@@ -535,7 +557,7 @@ erDiagram
 | Saved places | Table `weather.favourite_places` with `UNIQUE(user_id, location_id)` and FKs | Fixed shape, points at another table: the database guarantees no duplicates and no dangling ids, and "how many users saved Prague" is a plain `GROUP BY`. A JSONB array on the user would lose all of that |
 | User preferences | `auth.users.preferences JSONB`, validated by a Pydantic model | Small, optional, belongs to the user, nothing references it, and new settings need no migration. The right job for JSONB |
 | Places | Stored once in `weather.locations`, upserted from geocoding results | Stable ids for REST resources (`/locations/{id}`), and trips, saved places and statistics all reference the same row |
-| Trip stops | `CHECK (end_date >= start_date)`, exclusion constraint against overlapping stops, unique position per trip | Invalid trips cannot exist, whatever the application code does |
+| Trip stops | Required dates; `stop_order` with `UNIQUE(trip_id, stop_order)`; stays may share only a boundary day | See "Trip stops" below |
 | Search events | Written by an event handler, aggregated with SQL | Weather stays independent of statistics; statistics are flexible queries (time windows, per country) over raw events |
 
 ---
@@ -790,8 +812,8 @@ All settings come from environment variables (`.env` locally, secrets manager in
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` | v1.0 (Phase 6) |
 | `LOG_FORMAT` | `text` | `text` (readable) or `json` (one object per line; the API image sets `json`) | v1.0 (Phase 6) |
 | `TEST_REDIS_URL` | `redis://localhost:6380/0` | tests only | v1.0 |
-| `DATABASE_URL` | `postgresql+asyncpg://weather:weather@localhost:5432/weather_app` | Postgres | v2.0 |
-| `TEST_DATABASE_URL` | `…@localhost:5433/weather_app_test` | tests only | v2.0 |
+| `DATABASE_URL` | `postgresql+asyncpg://weather:weather@localhost:5432/weather_app` | Postgres (`…@db:5432/weather_app` inside compose) | v2.0 (Phase 8.1) |
+| `TEST_DATABASE_URL` | `…@localhost:5433/weather_app_test` | tests only (read by the test fixture, like `TEST_REDIS_URL`) | v2.0 (Phase 8.2) |
 | `JWT_SECRET` | (secret) | signs login tokens; never committed | v2.0 |
 | `JWT_TTL_MINUTES` | `60` | login lifetime | v2.0 |
 | `COOKIE_SECURE` | `true` | `false` only for local HTTP | v2.0 |
