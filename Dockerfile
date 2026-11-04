@@ -42,6 +42,9 @@ RUN groupadd --system --gid 10001 app \
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY app ./app
+# For the `migrate` service in docker-compose.yml (`alembic upgrade head` before the API starts).
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 USER app
 EXPOSE 8000

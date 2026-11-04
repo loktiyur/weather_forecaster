@@ -94,9 +94,22 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Brings the database schema up to date, then exits; `api` starts only if it succeeded.
+  # The same image as `api`, so the migrations always match the code that runs.
+  migrate:
+    profiles: ["full"]
+    image: weather-forecaster-api:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://weather:weather@db:5432/weather_app
+    depends_on:
       db:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"
 
   # The web frontend (frontend/Dockerfile): nginx serves the Vue app and proxies /api to `api`.
   # Only started with the `full` profile. Open http://localhost:8080

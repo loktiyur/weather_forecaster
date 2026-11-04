@@ -174,7 +174,7 @@ flowchart LR
 The outside stays as in v1.0: the browser talks only to `web`, nginx forwards `/api/...` to `api`, and the login cookie travels on the same origin. What changes is inside:
 
 - **`api` is still one image and one process**, now divided into `core` and three services (§6). `trips` calls `weather` directly; `weather` tells `stats` about searches through an in-process event; all of them reach Redis, Postgres and Open-Meteo only through `core`.
-- **`db` is new**: one PostgreSQL database with one schema per part (§8.2). Migrations run when the `api` container starts.
+- **`db` is new**: one PostgreSQL database with one schema per part (§8.2). A one-off `migrate` container (the `api` image running `alembic upgrade head`) brings it up to date before `api` starts.
 - **`redis` stays a disposable cache**: losing it slows requests down, nothing else.
 - **`web` is grouped by feature** like the backend (§9.1), but it never sees the backend's parts: only the REST API.
 
@@ -215,7 +215,7 @@ Both apps run on the host and reload on save; Docker runs only the infrastructur
 | **Unit + API tests** | `poetry run poe test-unit` | In-process (ASGI transport) | None |
 | **Integration tests** | `poetry run poe test-integration` (`test-redis` / `test-postgres` for one of them) | In-process | `redis-test`, `db-test` (from Phase 8.2); tests fail if they are not running |
 | **Frontend tests** | `npm run test` (in `frontend/`) | Not needed (API client mocked) | None |
-| **Full stack** | `docker compose --profile full up` | `api` container | `web`, `api`, `redis`, `db` (`db` from Phase 8.1) |
+| **Full stack** | `docker compose --profile full up` | `api` container | `web`, `api`, `redis`, `db` (from Phase 8.1), `migrate` (from Phase 8.3: runs the migrations, then exits) |
 | **CI** | GitHub Actions (§13) | In-process for tests; images built and smoke-tested | Service containers |
 | **Production** (optional) | Terraform + Cloud Run | Cloud Run | Managed Redis and Postgres |
 
@@ -784,7 +784,8 @@ weather_forecaster/
 
 ```
 ├── app/                          # core + services (layout in §6)
-├── migrations/                   # Alembic, one history for all schemas
+├── migrations/                   # Alembic (from Phase 8.3): env.py, versions/, one history for all schemas
+├── alembic.ini
 ├── frontend/src/                 # shared/ + features/{weather,auth,trips,stats}/ (§9.1)
 ├── tests/                        # outside app/: never in the image, not bound by the import rules
 │   ├── conftest.py · doubles.py · logs.py · fixtures/   # shared by all tests
@@ -796,7 +797,7 @@ weather_forecaster/
 │       │   └── integration/      # real Redis / Postgres
 │       ├── trips/                # same three folders
 │       └── stats/
-└── docker-compose.yml            # + db, db-test
+└── docker-compose.yml            # + db, db-test, migrate
 ```
 
 ---
@@ -852,11 +853,11 @@ Pull requests run only the jobs whose files changed; pushes to `main` (every mer
 | Job | Steps | From |
 |-----|-------|------|
 | `Lint, type-check, test` | ruff, format check, mypy strict, `Architecture` (import-linter, from Phase 7), unit + API tests | Phase 0 |
-| `Redis integration` | `redis:7.4-alpine` service container, Redis integration tests | Phase 3 |
+| `Redis integration` | `redis:7.4-alpine` service container, all tests except the Postgres ones, with coverage | Phase 3 |
 | `Docker image` | build the `api` (and `web` from Phase 5) images, start the `full` profile, run `scripts/smoke_test.sh`: readiness, a real weather request, the cache hit, the error format (and the web page from Phase 5) | Phase 4 |
 | `Frontend` | generated API types match the backend code, ESLint, Prettier, `vue-tsc`, Vitest, build | Phase 5 |
-| `Postgres integration` | `postgres:16-alpine` service container, Postgres integration tests (`alembic upgrade head`, `alembic check` from Phase 8.3) | Phase 8.2 |
-| `Coverage` | merges coverage from the test jobs, applies the 80 % gate (until then the gate runs in `Redis integration`, without the Postgres tests) | Phase 8.3 |
+| `Postgres integration` | `postgres:16-alpine` service container, `alembic upgrade head`, `alembic check` (models and migrations in sync, from Phase 8.3), Postgres integration tests with coverage | Phase 8.2 |
+| `Coverage` | merges the coverage data of `Redis integration` (all tests but Postgres) and `Postgres integration`, applies the 80 % gate (before Phase 8.3 the gate ran in `Redis integration`) | Phase 8.3 |
 | `Changes` | decides per job whether a pull request needs it (`dorny/paths-filter`); pushes to `main` run everything | Phase 6 |
 | `CI result` | the only required check: fails if any job failed, skipped jobs count as passed | Phase 6 |
 | `PR title` (`pr-title.yml`) | the PR title follows Conventional Commits (with squash merging it is the commit release-please reads) | Phase 6 |
@@ -871,8 +872,8 @@ flowchart LR
     changes --> redisj["Redis integration"]
     changes --> docker["Docker image"]
     changes --> fe["Frontend"]
-    changes --> pg["Postgres integration (v2.0)"]
-    redisj --> cov["Coverage (v2.0)"]
+    changes --> pg["Postgres integration"]
+    redisj --> cov["Coverage"]
     pg --> cov
     checks --> gate{"CI result<br/>nothing failed?"}
     docker --> gate
@@ -900,7 +901,7 @@ flowchart LR
 ```
 
 - **Release 1.0** is a set of two images (`api`, `web`) plus the official Redis image. `docker compose --profile full up` runs the whole app anywhere Docker runs.
-- **Release 2.0** adds Postgres; migrations run when the `api` container starts.
+- **Release 2.0** adds Postgres; the `migrate` container (same image as `api`) applies the migrations before `api` starts.
 - **Cloud deployment** (Cloud Run, managed Redis and Postgres, Terraform) is an optional extension.
 
 ---

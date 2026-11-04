@@ -16,6 +16,7 @@ dependencies = [
     "structlog (>=26.1.0,<27.0.0)",
     "sqlalchemy[asyncio] (>=2.1.6,<3.0.0)",
     "asyncpg (>=0.32.0,<0.33.0)",
+    "alembic (>=1.20.1,<2.0.0)",
 ]
 
 [dependency-groups]
@@ -59,7 +60,7 @@ select = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["app", "tests"]
+files = ["app", "tests", "migrations"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
@@ -104,6 +105,8 @@ markers = [
 # so running a single test file is not failed by the 80 % gate.
 source = ["app"]
 branch = true
+# Paths relative to the repo, so CI's Coverage job can merge the data of the test jobs.
+relative_files = true
 
 [tool.coverage.report]
 fail_under = 80
@@ -126,7 +129,11 @@ test-integration = { cmd = "pytest -m integration", help = "Tests against real R
 test-redis = { cmd = "pytest -m redis", help = "Tests against real Redis only (docker compose up -d redis-test)" }
 test-postgres = { cmd = "pytest -m postgres", help = "Tests against real Postgres only (docker compose up -d db-test)" }
 test-cov = { cmd = "pytest -v --cov", help = "Run all tests with the 80 % coverage gate" }
+test-cov-part = { cmd = "pytest --cov --cov-report= --cov-fail-under=0", help = "Record coverage of some tests without the gate (CI merges the parts): poe test-cov-part -m postgres" }
 check = { sequence = ["lint", "format-check", "typecheck", "architecture", "test-cov"], help = "Everything CI runs" }
+migrate = { cmd = "alembic upgrade head", help = "Apply all migrations to DATABASE_URL (the dev database by default)" }
+new-migration = { cmd = "alembic revision --autogenerate", help = "Create a migration from the model changes: poe new-migration -m \"add trips\"" }
+migration-check = { cmd = "alembic check", help = "Fail if the models have changes no migration covers (needs a migrated database)" }
 smoke-test = { cmd = "bash scripts/smoke_test.sh", help = "Smoke-test a running stack: poe smoke-test [API_URL] [WEB_URL], e.g. after docker compose --profile full up" }
 export-openapi = { cmd = "python scripts/export_openapi.py frontend/openapi.json", env = { PYTHONPATH = "." }, help = "Write the API's OpenAPI schema to frontend/openapi.json" }
 generate-api = { sequence = [

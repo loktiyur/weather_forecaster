@@ -228,9 +228,9 @@ Branch: `phase-8.2-db-session` · PR title `feat: …` (the readiness answer gai
 ### 8.3 — Alembic
 Branch: `phase-8.3-alembic` · PR title `build: …` (no release)
 
-- [ ] Alembic with async support; one schema per service (ARCHITECTURE.md §8); the first migration creates schema `weather` (still empty)
-- [ ] Migrations run on container start in the `full` profile
-- [ ] Migration test on `db-test`: upgrade to head and downgrade to base
+- [x] Alembic with async support; one schema per service (ARCHITECTURE.md §8); the first migration creates schema `weather` (still empty)
+- [x] Migrations run on container start in the `full` profile: a one-off `migrate` container (the API image running `alembic upgrade head`) that `api` waits for
+- [x] Migration test on `db-test`: upgrade to head and downgrade to base; also one head only and `alembic check` as a test
 
 **CI additions:**
 - `Postgres integration` also runs `alembic upgrade head` and `alembic check` (models and migrations in sync)

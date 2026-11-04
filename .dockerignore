@@ -3,6 +3,8 @@
 # so secrets cannot end up in an image by accident and builds stay fast.
 *
 !app/
+!migrations/
+!alembic.ini
 !pyproject.toml
 !poetry.lock
 
