@@ -23,7 +23,7 @@ Only Docker is needed:
 
 ```bash
 git clone git@github.com:loktiyur/weather_forecaster.git && cd weather_forecaster
-docker compose --profile full up -d --build     # builds and starts web, api, redis and db
+docker compose --profile full up -d --build     # builds and starts web, api, redis and db (migrated)
 open http://localhost:8080                      # the app (API docs: http://localhost:8080/docs)
 docker compose --profile full down              # stop everything
 ```
@@ -83,6 +83,24 @@ docker compose exec db psql -U weather -d weather_app
 
 `docker compose down -v` also deletes the volumes, so the next start begins with an empty cache and
 an empty database.
+
+### Database migrations
+
+The database schema is created and changed only by [Alembic](https://alembic.sqlalchemy.org/)
+migrations in `migrations/versions/`, one history for all service schemas. After
+`docker compose up -d`, and after pulling new migrations, bring the dev database up to date:
+
+```bash
+poetry run poe migrate                            # alembic upgrade head on DATABASE_URL
+poetry run poe new-migration -m "add trips"       # write a migration from the model changes
+poetry run poe migration-check                    # fails if a model change has no migration yet
+poetry run alembic downgrade -1                   # undo the last migration
+```
+
+A new migration is generated from the difference between the SQLAlchemy models and the database,
+so the database must be at head first. Read it before committing: Alembic cannot see renames
+(it writes a drop and an add) and leaves data changes to you. The full stack runs the migrations
+itself (see below); the tests migrate `db-test` themselves.
 
 Without Redis the app still works: every request calls the weather APIs, a warning is logged and `/health/ready` returns `503`.
 The same goes for PostgreSQL for now: no endpoint reads it yet, so the app starts without it, logs a warning and `/health/ready` returns `503`.
@@ -167,8 +185,12 @@ docker compose --profile full down             # stop everything
 - Without `--profile full`, `docker compose up` still starts only the infrastructure.
 - The container reads optional settings from `.env` (e.g. `GEOCODING_PROVIDER`), but always uses
   `REDIS_URL=redis://redis:6379/0` and `DATABASE_URL=…@db:5432/weather_app`: the container names
-  inside the Compose network. The API starts only once Redis and PostgreSQL are healthy.
-- Both images run as non-root users. The API image contains only `app/` and its runtime dependencies;
+  inside the Compose network.
+- **Migrations run first.** The one-off `migrate` container (the API image running
+  `alembic upgrade head`) starts once PostgreSQL is healthy and then exits; the API starts only
+  after it succeeded and once Redis is healthy. `docker compose --profile full ps -a` shows it as
+  `Exited (0)`, `docker compose --profile full logs migrate` shows what it applied.
+- Both images run as non-root users. The API image contains only `app/`, the migrations and the runtime dependencies;
   the web image only nginx and the built files. Both `.dockerignore` files are allow-lists, so tests,
   `.env` or `node_modules` cannot slip in.
 - Docker's healthcheck uses `/health` (liveness): a Redis or PostgreSQL outage makes `/health/ready`
@@ -322,6 +344,8 @@ poetry run poe test-redis        # only the Redis ones (redis-test)
 poetry run poe test-postgres     # only the PostgreSQL ones (db-test)
 poetry run poe test              # all tests; extra args pass through: poe test -k geocode -v
 poetry run poe test-cov          # all tests with coverage, fails below 80 %
+poetry run poe test-cov-part     # coverage of some tests, no gate (CI merges the parts): poe test-cov-part -m postgres
+poetry run poe migrate           # the migration tasks: see "Database migrations" above
 poetry run poe --help            # list all tasks
 ```
 
@@ -349,10 +373,11 @@ poetry run poe --help            # list all tasks
 | Job | Steps | On a pull request, runs when it changes |
 |-----|-------|-----------------------------------------|
 | `Changes` | decides which jobs a pull request needs | always |
-| `Lint, type-check, test` | lint, format check, mypy, dependency rules (`Architecture`), unit + API tests | `app/`, `tests/`, `scripts/`, Poetry files, `*.md` (ruff checks the Python examples in Markdown) |
-| `Redis integration` | starts `redis:7.4-alpine` as a service container, runs the Redis tests, then all tests except the PostgreSQL ones with the coverage gate | `app/`, `tests/`, Poetry files |
-| `Postgres integration` | starts `postgres:16-alpine` as a service container, runs the PostgreSQL tests | `app/`, `tests/`, Poetry files |
-| `Docker image` | builds the API and web images, starts the full stack with Compose, runs `scripts/smoke_test.sh` against both | `app/`, `frontend/`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `scripts/smoke_test.sh`, Poetry files |
+| `Lint, type-check, test` | lint, format check, mypy, dependency rules (`Architecture`), unit + API tests | `app/`, `migrations/`, `tests/`, `scripts/`, Poetry files, `*.md` (ruff checks the Python examples in Markdown) |
+| `Redis integration` | starts `redis:7.4-alpine` as a service container, runs all tests except the PostgreSQL ones and records their coverage | `app/`, `migrations/`, `tests/`, Poetry files |
+| `Postgres integration` | starts `postgres:16-alpine` as a service container, applies the migrations (`poe migrate`), checks they match the models (`poe migration-check`), runs the PostgreSQL tests and records their coverage | `app/`, `migrations/`, `tests/`, Poetry files |
+| `Coverage` | merges the coverage of both integration jobs and fails below 80 % | when both integration jobs run |
+| `Docker image` | builds the API and web images, starts the full stack with Compose (migrations included), runs `scripts/smoke_test.sh` against both | `app/`, `migrations/`, `frontend/`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `scripts/smoke_test.sh`, Poetry files |
 | `Frontend` | API types match the backend, ESLint, Prettier, vue-tsc, Vitest, production build | `frontend/`, `app/` (a backend change can change the API contract), `scripts/export_openapi.py` |
 | `CI result` | fails if any job failed; skipped jobs count as passed | always |
 
