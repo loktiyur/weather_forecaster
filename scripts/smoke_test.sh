@@ -19,7 +19,7 @@ json_check() {  # json_check '<python expression on d>' <<< "$json"
     python3 -c "import json, sys; d = json.load(sys.stdin); sys.exit(0 if ($1) else 1)"
 }
 
-step "Readiness: API is up and reaches Redis"
+step "Readiness: API is up and reaches Redis and Postgres"
 "${CURL[@]}" --retry 15 --retry-connrefused --retry-delay 1 "$BASE_URL/health/ready"
 echo
 

@@ -6,7 +6,7 @@ import redis.asyncio as redis
 
 from app.core.cache.redis import RedisCache
 
-pytestmark = pytest.mark.integration
+pytestmark = pytest.mark.redis
 
 
 @pytest.fixture

@@ -85,6 +85,7 @@ docker compose exec db psql -U weather -d weather_app
 an empty database.
 
 Without Redis the app still works: every request calls the weather APIs, a warning is logged and `/health/ready` returns `503`.
+The same goes for PostgreSQL for now: no endpoint reads it yet, so the app starts without it, logs a warning and `/health/ready` returns `503`.
 
 ## Run the app
 
@@ -99,7 +100,7 @@ poetry run uvicorn app.main:app --reload
 | http://localhost:8000/docs | Swagger UI: interactive API docs, try every endpoint from the browser |
 | http://localhost:8000/redoc | ReDoc: alternative read-only API docs |
 | http://localhost:8000/health | `{"status":"ok"}`: the app is running |
-| http://localhost:8000/health/ready | `200` if Redis is reachable, `503` if not |
+| http://localhost:8000/health/ready | `200` if Redis and PostgreSQL are reachable, `503` if not |
 
 The API itself has no page at `/` (it returns a `NOT_FOUND` error); the web page is the frontend below.
 
@@ -170,8 +171,8 @@ docker compose --profile full down             # stop everything
 - Both images run as non-root users. The API image contains only `app/` and its runtime dependencies;
   the web image only nginx and the built files. Both `.dockerignore` files are allow-lists, so tests,
   `.env` or `node_modules` cannot slip in.
-- Docker's healthcheck uses `/health` (liveness): a Redis outage makes `/health/ready` return `503`,
-  but the container stays healthy and keeps answering, just without the cache.
+- Docker's healthcheck uses `/health` (liveness): a Redis or PostgreSQL outage makes `/health/ready`
+  return `503`, but the container stays healthy and keeps answering (without Redis, just without the cache).
 
 `poe smoke-test` calls the real Open-Meteo API once, because its job is to prove the running
 container works end to end; the test suite itself never calls external APIs.
@@ -305,7 +306,7 @@ CI runs exactly the same tasks.
 
 ```bash
 poetry run poe format-code     # fix lint issues + format everything (run this when the format check fails)
-poetry run poe check           # lint, format check, type check, all tests with coverage (needs redis-test, see below)
+poetry run poe check           # lint, format check, type check, all tests with coverage (needs redis-test and db-test, see below)
 ```
 
 Individual tasks:
@@ -316,7 +317,9 @@ poetry run poe format-check      # ruff format --check (changes nothing)
 poetry run poe typecheck         # mypy, strict
 poetry run poe architecture      # dependency rules between core and services (import-linter)
 poetry run poe test-unit         # unit + API tests, no Docker needed
-poetry run poe test-integration  # tests against the real redis-test container
+poetry run poe test-integration  # tests against the real redis-test and db-test containers
+poetry run poe test-redis        # only the Redis ones (redis-test)
+poetry run poe test-postgres     # only the PostgreSQL ones (db-test)
 poetry run poe test              # all tests; extra args pass through: poe test -k geocode -v
 poetry run poe test-cov          # all tests with coverage, fails below 80 %
 poetry run poe --help            # list all tasks
@@ -324,17 +327,19 @@ poetry run poe --help            # list all tasks
 
 ### Unit vs. integration tests
 
-- **Unit + API tests** never need infrastructure: external APIs are mocked with respx and the cache
-  is a small in-memory test double of our own `Cache` interface.
-- **Integration tests** (`@pytest.mark.integration`, in the `integration/` folders and `tests/core/cache/`) run against a real Redis
-  in Docker. **The `redis-test` container must be running, otherwise these tests fail**
-  (with a message telling you how to start it):
+- **Unit + API tests** never need infrastructure: external APIs are mocked with respx, and the cache
+  and the database are small test doubles of our own `Cache` and `Database`.
+- **Integration tests** run against a real Redis or PostgreSQL in Docker. A test marks what it needs
+  with `@pytest.mark.redis` or `@pytest.mark.postgres`; both count as `integration`. They live in the
+  `integration/` folders and in `tests/core/` (`*_integration.py`).
+  **The `redis-test` and `db-test` containers must be running, otherwise these tests fail**
+  (with a message telling you how to start them):
   ```bash
-  docker compose up -d redis-test     # Docker Desktop / Rancher Desktop must be running
-  docker compose ps                   # redis-test should be "healthy"
+  docker compose up -d redis-test db-test   # Docker Desktop / Rancher Desktop must be running
+  docker compose ps                         # both should be "healthy"
   poetry run poe test-integration
   ```
-  `poe test`, `poe test-cov` and `poe check` run all tests, so they need `redis-test` running too.
+  `poe test`, `poe test-cov` and `poe check` run all tests, so they need both containers running too.
   Without Docker, use `poe test-unit`.
 
 ### CI
@@ -345,7 +350,8 @@ poetry run poe --help            # list all tasks
 |-----|-------|-----------------------------------------|
 | `Changes` | decides which jobs a pull request needs | always |
 | `Lint, type-check, test` | lint, format check, mypy, dependency rules (`Architecture`), unit + API tests | `app/`, `tests/`, `scripts/`, Poetry files, `*.md` (ruff checks the Python examples in Markdown) |
-| `Redis integration` | starts `redis:7.4-alpine` as a service container, runs the integration tests, then all tests with the coverage gate | `app/`, `tests/`, Poetry files |
+| `Redis integration` | starts `redis:7.4-alpine` as a service container, runs the Redis tests, then all tests except the PostgreSQL ones with the coverage gate | `app/`, `tests/`, Poetry files |
+| `Postgres integration` | starts `postgres:16-alpine` as a service container, runs the PostgreSQL tests | `app/`, `tests/`, Poetry files |
 | `Docker image` | builds the API and web images, starts the full stack with Compose, runs `scripts/smoke_test.sh` against both | `app/`, `frontend/`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `scripts/smoke_test.sh`, Poetry files |
 | `Frontend` | API types match the backend, ESLint, Prettier, vue-tsc, Vitest, production build | `frontend/`, `app/` (a backend change can change the API contract), `scripts/export_openapi.py` |
 | `CI result` | fails if any job failed; skipped jobs count as passed | always |

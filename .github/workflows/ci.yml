@@ -22,6 +22,7 @@ jobs:
     outputs:
       checks: ${{ steps.filter.outputs.checks }}
       redis: ${{ steps.filter.outputs.redis }}
+      postgres: ${{ steps.filter.outputs.postgres }}
       docker: ${{ steps.filter.outputs.docker }}
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
@@ -45,9 +46,10 @@ jobs:
               - "tests/**"
               - "scripts/**"
               - "**/*.md"  # ruff also checks the Python examples in Markdown
-            redis:
+            redis: &integration
               - *python
               - "tests/**"
+            postgres: *integration
             docker:
               - *python
               - "frontend/**"
@@ -131,11 +133,53 @@ jobs:
         run: poetry install --no-interaction
 
       - name: Integration tests
-        run: poetry run poe test-integration -v
+        run: poetry run poe test-redis -v
 
-      # Coverage needs the whole suite in one run, so it lives in the job that has Redis.
-      - name: All tests with coverage gate
-        run: poetry run poe test-cov
+      # Coverage needs the suite in one run, so it lives in the job that has Redis. The
+      # Postgres tests run in their own job and are not counted until Phase 8.3 merges the
+      # coverage of both jobs.
+      - name: All tests except Postgres, with coverage gate
+        run: poetry run poe test-cov -m "not postgres"
+
+  postgres-integration:
+    name: Postgres integration
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.postgres == 'true'
+    runs-on: ubuntu-latest
+    services:
+      # Mapped to 5433 with the same database and credentials as the local `db-test`
+      # container, so the defaults match.
+      postgres:
+        image: postgres:16-alpine
+        ports:
+          - 5433:5432
+        env:
+          POSTGRES_USER: weather
+          POSTGRES_PASSWORD: weather
+          POSTGRES_DB: weather_app_test
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U weather -d weather_app_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://weather:weather@localhost:5433/weather_app_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Integration tests
+        run: poetry run poe test-postgres -v
 
   docker-image:
     name: Docker image
@@ -243,7 +287,7 @@ jobs:
   # one; this job reports for all of them.
   ci-result:
     name: CI result
-    needs: [changes, checks, redis-integration, docker-image, frontend]
+    needs: [changes, checks, redis-integration, postgres-integration, docker-image, frontend]
     if: always()
     runs-on: ubuntu-latest
     steps:

@@ -1,4 +1,5 @@
-"""Test doubles for our own `Cache` interface. Real Redis is tested by the integration tests."""
+"""Test doubles for our own `Cache` and `Database`. Real Redis and Postgres are tested by the
+integration tests."""
 
 from dataclasses import dataclass, field
 
@@ -34,3 +35,13 @@ class UnavailableCache:
 
     async def ping(self) -> bool:
         return False
+
+
+@dataclass
+class StubDatabase:
+    """Stands in for `Database` where only readiness matters (no endpoint reads Postgres yet)."""
+
+    reachable: bool = True
+
+    async def ping(self) -> bool:
+        return self.reachable

@@ -31,6 +31,8 @@ class Settings(BaseSettings):
 
     # The `db` container from docker-compose.yml (`docker compose up -d`).
     database_url: str = "postgresql+asyncpg://weather:weather@localhost:5432/weather_app"
+    # Connecting and the readiness ping give up after this; requests then fail instead of hanging.
+    database_timeout_seconds: float = 2.0
 
     cache_ttl_geocoding_seconds: int = 7 * 24 * 3600
     cache_ttl_current_seconds: int = 600

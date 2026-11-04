@@ -193,15 +193,19 @@ flowchart LR
     subgraph compose["docker compose up -d"]
         redis[("redis<br/>port 6379")]
         redistest[("redis-test<br/>port 6380")]
+        db[("db<br/>port 5432")]
+        dbtest[("db-test<br/>port 5433")]
     end
 
     user --> vite
     vite -- "proxy /api" --> uvicorn
     uvicorn <--> redis
+    uvicorn <--> db
     tests -. integration tests .-> redistest
+    tests -. integration tests .-> dbtest
 ```
 
-Both apps run on the host and reload on save; Docker runs only the infrastructure. From Phase 8.1 Compose also runs `db` (port 5432) and `db-test` (port 5433).
+Both apps run on the host and reload on save; Docker runs only the infrastructure.
 
 ### Runtime setups
 
@@ -209,7 +213,7 @@ Both apps run on the host and reload on save; Docker runs only the infrastructur
 |-------|---------|--------------|------------|
 | **Development** | `docker compose up -d` + `poetry run uvicorn app.main:app --reload` + `npm run dev` | On the host | `redis`, `redis-test`, `db`, `db-test` (the databases from Phase 8.1) |
 | **Unit + API tests** | `poetry run poe test-unit` | In-process (ASGI transport) | None |
-| **Integration tests** | `poetry run poe test-integration` | In-process | `redis-test` (+ `db-test` in v2.0); tests fail if they are not running |
+| **Integration tests** | `poetry run poe test-integration` (`test-redis` / `test-postgres` for one of them) | In-process | `redis-test`, `db-test` (from Phase 8.2); tests fail if they are not running |
 | **Frontend tests** | `npm run test` (in `frontend/`) | Not needed (API client mocked) | None |
 | **Full stack** | `docker compose --profile full up` | `api` container | `web`, `api`, `redis`, `db` (`db` from Phase 8.1) |
 | **CI** | GitHub Actions (§13) | In-process for tests; images built and smoke-tested | Service containers |
@@ -217,21 +221,22 @@ Both apps run on the host and reload on save; Docker runs only the infrastructur
 
 ---
 
-## 5. Backend today (after Phase 7)
+## 5. Backend today (after Phase 8.2)
 
-The §6 layout with only the parts that exist so far. `core/db.py`, `core/events.py`, `core/auth/` and the `trips` and `stats` services are added in the phases that need them (ROADMAP.md).
+The §6 layout with only the parts that exist so far. `core/events.py`, `core/auth/` and the `trips` and `stats` services are added in the phases that need them (ROADMAP.md).
 
 ```
 app/
-├── main.py                  # composition root: the lifespan creates the HTTP client, Redis and
-│                            #   WeatherService; includes the routers
+├── main.py                  # composition root: the lifespan creates the HTTP client, Redis, the
+│                            #   Database and WeatherService; includes the routers
 ├── core/                    # infrastructure, no features
 │   ├── config.py            # Settings
 │   ├── cache/               # base.py (Cache), redis.py (RedisCache), aside.py (get_or_load)
+│   ├── db.py                # Postgres: Database (engine + sessions), get_session, Base (no models yet)
 │   ├── http.py              # shared httpx client + get_json (with retries)
 │   ├── errors.py            # the error format, shared exception handlers, error_docs()
 │   ├── exceptions.py        # shared exceptions (upstream failures)
-│   ├── health.py            # /health, /health/ready (asks the cache directly)
+│   ├── health.py            # /health, /health/ready (pings the cache and the database)
 │   ├── language.py          # Language: en / uk / cs / ru
 │   ├── logging.py           # structlog setup
 │   └── middleware.py        # request id + access log
@@ -659,7 +664,7 @@ Base path `/api/v1`. Interactive docs at `/docs` (Swagger) and `/redoc`.
 | `GET` | `/api/v1/weather/forecast` | same + `days` (1–16, default 7) | Daily forecast |
 | `GET` | `/api/v1/locations/search` | `q`, `country`, `lang`, `limit` (1–20, default 5) | Candidate places for an ambiguous name, populated places only; `{"results": [...]}` |
 | `GET` | `/health` | — | Liveness |
-| `GET` | `/health/ready` | — | Readiness: Redis (and Postgres in v2.0) reachable, `503` otherwise |
+| `GET` | `/health/ready` | — | Readiness: Redis and Postgres (from Phase 8.2) reachable, `503` otherwise |
 
 ### v2.0 additions
 
@@ -813,6 +818,7 @@ All settings come from environment variables (`.env` locally, secrets manager in
 | `LOG_FORMAT` | `text` | `text` (readable) or `json` (one object per line; the API image sets `json`) | v1.0 (Phase 6) |
 | `TEST_REDIS_URL` | `redis://localhost:6380/0` | tests only | v1.0 |
 | `DATABASE_URL` | `postgresql+asyncpg://weather:weather@localhost:5432/weather_app` | Postgres (`…@db:5432/weather_app` inside compose) | v2.0 (Phase 8.1) |
+| `DATABASE_TIMEOUT_SECONDS` | `2` | connecting and the readiness ping give up after this | v2.0 (Phase 8.2) |
 | `TEST_DATABASE_URL` | `…@localhost:5433/weather_app_test` | tests only (read by the test fixture, like `TEST_REDIS_URL`) | v2.0 (Phase 8.2) |
 | `JWT_SECRET` | (secret) | signs login tokens; never committed | v2.0 |
 | `JWT_TTL_MINUTES` | `60` | login lifetime | v2.0 |
@@ -826,8 +832,8 @@ All settings come from environment variables (`.env` locally, secrets manager in
 |-------|------|-------|----------------|
 | Unit | providers (params, JSON mapping, errors), service logic, cache keys | `respx`, JSON fixtures, test doubles of our own interfaces | none |
 | API | status codes, schemas, error format, validation, headers, auth rules (v2.0) | `httpx.AsyncClient` + `ASGITransport`, `dependency_overrides` | none |
-| Integration: Redis | `RedisCache`, TTL expiry, full request path through Redis | `@pytest.mark.integration` | `redis-test` / CI service container |
-| Integration: Postgres (v2.0) | repositories, constraints, migrations, statistics queries | `@pytest.mark.integration` | `db-test` / CI service container |
+| Integration: Redis | `RedisCache`, TTL expiry, full request path through Redis | `@pytest.mark.redis` | `redis-test` / CI service container |
+| Integration: Postgres (v2.0) | sessions and readiness (Phase 8.2), repositories, constraints, migrations, statistics queries | `@pytest.mark.postgres` | `db-test` / CI service container |
 | Frontend | components, pages, API error handling | Vitest + Vue Test Utils, mocked API client | none |
 | End-to-end (optional) | browser through the `full` profile | Playwright | full stack |
 
@@ -835,6 +841,7 @@ All settings come from environment variables (`.env` locally, secrets manager in
 - **One `tests/` folder, grouped by part, then by kind** (§11): all tests of a service are in `tests/services/<service>/`, split into `unit/`, `api/` and `integration/`. Tests stay outside `app/`, so they never reach the API image, the import-linter contracts cover only production code, and the shared doubles and fixtures live in one place. `pytest tests/services/weather` runs everything for one service.
 - **No fakes of third-party infrastructure.** Redis and Postgres are tested for real; test doubles exist only for *our own* interfaces.
 - **No test calls an external API.** Open-Meteo and GeoNames are always mocked.
+- **Integration tests say what they need** (`redis` or `postgres` marker); `tests/conftest.py` adds `integration` to both, so `-m integration` runs them all and each CI job runs its own.
 - **Integration tests fail when their container is not running**, with a hint how to start it. A green run always means the real infrastructure was used.
 - **Coverage gate:** ≥ 80 % over the whole backend suite.
 
@@ -845,11 +852,11 @@ Pull requests run only the jobs whose files changed; pushes to `main` (every mer
 | Job | Steps | From |
 |-----|-------|------|
 | `Lint, type-check, test` | ruff, format check, mypy strict, `Architecture` (import-linter, from Phase 7), unit + API tests | Phase 0 |
-| `Redis integration` | `redis:7.4-alpine` service container, integration tests | Phase 3 |
+| `Redis integration` | `redis:7.4-alpine` service container, Redis integration tests | Phase 3 |
 | `Docker image` | build the `api` (and `web` from Phase 5) images, start the `full` profile, run `scripts/smoke_test.sh`: readiness, a real weather request, the cache hit, the error format (and the web page from Phase 5) | Phase 4 |
 | `Frontend` | generated API types match the backend code, ESLint, Prettier, `vue-tsc`, Vitest, build | Phase 5 |
-| `Postgres integration` | `postgres:16-alpine` service container, `alembic upgrade head`, `alembic check`, Postgres integration tests | Phase 8 |
-| `Coverage` | merges coverage from the test jobs, applies the 80 % gate (until Phase 8 the gate runs in `Redis integration`) | Phase 8 |
+| `Postgres integration` | `postgres:16-alpine` service container, Postgres integration tests (`alembic upgrade head`, `alembic check` from Phase 8.3) | Phase 8.2 |
+| `Coverage` | merges coverage from the test jobs, applies the 80 % gate (until then the gate runs in `Redis integration`, without the Postgres tests) | Phase 8.3 |
 | `Changes` | decides per job whether a pull request needs it (`dorny/paths-filter`); pushes to `main` run everything | Phase 6 |
 | `CI result` | the only required check: fails if any job failed, skipped jobs count as passed | Phase 6 |
 | `PR title` (`pr-title.yml`) | the PR title follows Conventional Commits (with squash merging it is the commit release-please reads) | Phase 6 |

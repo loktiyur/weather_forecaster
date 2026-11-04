@@ -219,11 +219,11 @@ Branch: `phase-8.1-postgres-containers` · PR title `build: …` (no release)
 ### 8.2 — SQLAlchemy async session
 Branch: `phase-8.2-db-session` · PR title `feat: …` (the readiness answer gains `postgres`: minor release)
 
-- [ ] `app/core/db.py`: SQLAlchemy 2.0 async engine (`asyncpg`), session dependency, `Base`; the engine is created in the lifespan and disposed on shutdown
-- [ ] `GET /health/ready` also checks Postgres
-- [ ] Integration tests against `db-test`: a fixture that fails (never skips) when the container is not running, like Redis; tests for the session and readiness; markers `redis` and `postgres` under `integration`
+- [x] `app/core/db.py`: SQLAlchemy 2.0 async engine (`asyncpg`), session dependency, `Base`; the engine is created in the lifespan and disposed on shutdown
+- [x] `GET /health/ready` also checks Postgres
+- [x] Integration tests against `db-test`: a fixture that fails (never skips) when the container is not running, like Redis; tests for the session and readiness; markers `redis` and `postgres` under `integration`
 
-**CI additions:** new job `Postgres integration`: `postgres:16-alpine` service container · Postgres integration tests
+**CI additions:** new job `Postgres integration`: `postgres:16-alpine` service container · Postgres integration tests. Until 8.3 merges the coverage, the gate in `Redis integration` runs without the Postgres tests
 
 ### 8.3 — Alembic
 Branch: `phase-8.3-alembic` · PR title `build: …` (no release)

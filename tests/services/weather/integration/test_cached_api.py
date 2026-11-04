@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.cache.redis import RedisCache
 from app.core.config import Settings
+from app.core.db import get_database
 from app.core.health import get_cache
 from app.main import create_app, lifespan
 from app.services.weather.dependencies import get_weather_service
@@ -18,10 +19,11 @@ from app.services.weather.providers.open_meteo_geocoding import OpenMeteoGeocodi
 from app.services.weather.providers.open_meteo_weather import OpenMeteoWeatherClient
 from app.services.weather.service import WeatherService
 from tests.conftest import TEST_REDIS_URL
+from tests.doubles import StubDatabase
 from tests.logs import json_logs
 from tests.services.weather.api.upstream import mock_forecast, mock_geocoding
 
-pytestmark = pytest.mark.integration
+pytestmark = pytest.mark.redis
 
 CURRENT = "/api/v1/weather/current"
 
@@ -41,6 +43,7 @@ async def client(
     )
     app.dependency_overrides[get_weather_service] = lambda: service
     app.dependency_overrides[get_cache] = lambda: cache
+    app.dependency_overrides[get_database] = StubDatabase
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
@@ -70,7 +73,7 @@ async def test_ready_with_real_redis(client: AsyncClient) -> None:
     response = await client.get("/health/ready")
 
     assert response.status_code == 200
-    assert response.json()["checks"] == {"redis": "ok"}
+    assert response.json()["checks"]["redis"] == "ok"
 
 
 async def test_lifespan_connects_to_redis(
@@ -78,7 +81,7 @@ async def test_lifespan_connects_to_redis(
     redis_client: redis.Redis,
     respx_mock: respx.MockRouter,
 ) -> None:
-    """Real startup with a reachable Redis: no warning, and responses get cached."""
+    """Real startup with a reachable Redis: no Redis warning, and responses get cached."""
     mock_geocoding(respx_mock)
     mock_forecast(respx_mock, "forecast_current")
     app = create_app(settings.model_copy(update={"redis_url": TEST_REDIS_URL}))
@@ -91,4 +94,4 @@ async def test_lifespan_connects_to_redis(
                 second = await ac.get(CURRENT, params={"city": "Prague"})
 
     assert second.json()["cached"] is True
-    assert not [line for line in lines() if line["level"] == "warning"]
+    assert not [line for line in lines() if line["event"] == "redis_unreachable"]
