@@ -14,6 +14,8 @@ dependencies = [
     "redis (>=8.1.0,<9.0.0)",
     "tenacity (>=9.1.4,<9.2.0)",
     "structlog (>=26.1.0,<27.0.0)",
+    "sqlalchemy[asyncio] (>=2.1.6,<3.0.0)",
+    "asyncpg (>=0.32.0,<0.33.0)",
 ]
 
 [dependency-groups]
@@ -90,8 +92,11 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "--strict-markers"
+# Tests mark what they need (`redis` or `postgres`); tests/conftest.py adds `integration` to both.
 markers = [
-    "integration: needs real infrastructure (locally: docker compose up -d redis-test)",
+    "integration: needs real infrastructure (set by the redis and postgres markers)",
+    "redis: needs the test Redis (docker compose up -d redis-test)",
+    "postgres: needs the test Postgres (docker compose up -d db-test)",
 ]
 
 [tool.coverage.run]
@@ -117,7 +122,9 @@ typecheck = { cmd = "mypy", help = "Static type checking (strict)" }
 architecture = { cmd = "lint-imports", help = "Check the dependency rules between core and services (import-linter)" }
 test = { cmd = "pytest", help = "Run all tests; extra args are passed through, e.g. poe test -k geocode" }
 test-unit = { cmd = "pytest -m 'not integration'", help = "Unit + API tests, no infrastructure needed" }
-test-integration = { cmd = "pytest -m integration", help = "Tests against real Redis (docker compose up -d redis-test)" }
+test-integration = { cmd = "pytest -m integration", help = "Tests against real Redis and Postgres (docker compose up -d redis-test db-test)" }
+test-redis = { cmd = "pytest -m redis", help = "Tests against real Redis only (docker compose up -d redis-test)" }
+test-postgres = { cmd = "pytest -m postgres", help = "Tests against real Postgres only (docker compose up -d db-test)" }
 test-cov = { cmd = "pytest -v --cov", help = "Run all tests with the 80 % coverage gate" }
 check = { sequence = ["lint", "format-check", "typecheck", "architecture", "test-cov"], help = "Everything CI runs" }
 smoke-test = { cmd = "bash scripts/smoke_test.sh", help = "Smoke-test a running stack: poe smoke-test [API_URL] [WEB_URL], e.g. after docker compose --profile full up" }

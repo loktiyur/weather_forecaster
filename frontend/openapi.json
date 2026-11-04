@@ -537,7 +537,7 @@
           "health"
         ],
         "summary": "Readiness check",
-        "description": "Checks the dependencies. `503` if any is down.\n\nThe weather endpoints still work without Redis (just slower), but a load balancer or\nan operator should know the cache is gone.",
+        "description": "Checks the dependencies. `503` if any is down.\n\nThe weather endpoints still work without Redis (just slower), but a load balancer or\nan operator should know the cache is gone. Postgres holds the data the app keeps.",
         "operationId": "ready_health_ready_get",
         "responses": {
           "200": {

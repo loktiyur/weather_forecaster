@@ -8,6 +8,7 @@ from fastapi import APIRouter, FastAPI
 from app.core import errors
 from app.core.cache.redis import RedisCache, create_redis_client
 from app.core.config import Settings, get_settings
+from app.core.db import Database
 from app.core.health import router as health_router
 from app.core.http import create_http_client
 from app.core.logging import configure_logging
@@ -43,6 +44,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not await cache.ping():
         # Not fatal: the app works without the cache and reconnects when Redis is back.
         log.warning("redis_unreachable", redis=_without_credentials(settings.redis_url))
+    database = Database(settings)
+    app.state.database = database
+    if not await database.ping():
+        # Not fatal yet: no endpoint reads the database. Readiness reports it.
+        log.warning("postgres_unreachable", postgres=_without_credentials(settings.database_url))
 
     async with create_http_client(settings) as http:
         app.state.weather_service = WeatherService(
@@ -54,11 +60,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:
+            await database.dispose()
             await redis_client.aclose()
 
 
 def _without_credentials(url: str) -> str:
-    """`redis://:secret@host:6379/0` → `redis://host:6379/0`: passwords stay out of logs."""
+    """`redis://:secret@host:6379/0` → `redis://host:6379/0`: passwords stay out of logs.
+
+    The same for the database URL (`postgresql+asyncpg://user:secret@host/db`).
+    """
     parts = urlsplit(url)
     return parts._replace(netloc=parts.netloc.rpartition("@")[2]).geturl()
 

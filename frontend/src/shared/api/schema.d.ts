@@ -103,7 +103,7 @@ export interface paths {
          * @description Checks the dependencies. `503` if any is down.
          *
          *     The weather endpoints still work without Redis (just slower), but a load balancer or
-         *     an operator should know the cache is gone.
+         *     an operator should know the cache is gone. Postgres holds the data the app keeps.
          */
         get: operations["ready_health_ready_get"];
         put?: never;

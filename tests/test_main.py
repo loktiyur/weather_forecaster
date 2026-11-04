@@ -31,7 +31,7 @@ async def test_lifespan_wires_the_real_service(
 ) -> None:
     """Runs the real startup/shutdown (ASGITransport does not), so no dependency overrides.
 
-    Redis is unreachable here (see conftest): the app must still start and answer.
+    Redis and Postgres are unreachable here (see conftest): the app must still start and answer.
     """
     mock_geocoding(respx_mock)
     mock_forecast(respx_mock, "forecast_current")
@@ -47,11 +47,16 @@ async def test_lifespan_wires_the_real_service(
                 ready = await client.get("/health/ready")
             assert response.status_code == 200
             assert response.json()["cached"] is False
-            # Readiness asks the cache the lifespan created, and that Redis is unreachable.
-            assert ready.json() == {"status": "unavailable", "checks": {"redis": "unavailable"}}
+            # Readiness asks the cache and the database the lifespan created; both are unreachable.
+            assert ready.json() == {
+                "status": "unavailable",
+                "checks": {"redis": "unavailable", "postgres": "unavailable"},
+            }
 
-    [warning] = [line for line in lines() if line["event"] == "redis_unreachable"]
-    assert warning["redis"] == "redis://localhost:1/0"
+    [redis_warning] = [line for line in lines() if line["event"] == "redis_unreachable"]
+    assert redis_warning["redis"] == "redis://localhost:1/0"
+    [postgres_warning] = [line for line in lines() if line["event"] == "postgres_unreachable"]
+    assert postgres_warning["postgres"] == "postgresql+asyncpg://localhost:1/weather_app"
     # The shared HTTP client is closed on shutdown.
     assert service._weather._http.is_closed  # type: ignore[attr-defined]
 
@@ -70,7 +75,8 @@ def test_api_version_matches_pyproject() -> None:
         ("redis://:secret@cache:6379/0", "redis://cache:6379/0"),
         ("redis://user:secret@cache:6379/0", "redis://cache:6379/0"),
         ("redis://localhost:6379/0", "redis://localhost:6379/0"),
+        ("postgresql+asyncpg://weather:secret@db:5432/app", "postgresql+asyncpg://db:5432/app"),
     ],
 )
-def test_redis_url_is_logged_without_credentials(url: str, expected: str) -> None:
+def test_urls_are_logged_without_credentials(url: str, expected: str) -> None:
     assert _without_credentials(url) == expected
