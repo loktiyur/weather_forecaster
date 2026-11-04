@@ -4,6 +4,13 @@ All notable changes to this project. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0](https://github.com/loktiyur/weather_forecaster/compare/v1.2.0...v1.3.0) (2026-10-27)
+
+
+### Features
+
+* Created postgres docker container[Phase 8.1] ([#16](https://github.com/loktiyur/weather_forecaster/issues/16)) ([c4956ce](https://github.com/loktiyur/weather_forecaster/commit/c4956ceb158509db3135b1185f90915d0df793b0))
+
 ## [1.2.0](https://github.com/loktiyur/weather_forecaster/compare/v1.1.1...v1.2.0) (2026-10-26)
 
 
