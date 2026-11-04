@@ -4,6 +4,13 @@ All notable changes to this project. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.4.0](https://github.com/loktiyur/weather_forecaster/compare/v1.3.0...v1.4.0) (2026-11-04)
+
+
+### Features
+
+* SQLAlchemy session added [Phase 8.2] ([#18](https://github.com/loktiyur/weather_forecaster/issues/18)) ([bf4321b](https://github.com/loktiyur/weather_forecaster/commit/bf4321bd9981f3cc919f34684e7364ad1807c11f))
+
 ## [1.3.0](https://github.com/loktiyur/weather_forecaster/compare/v1.2.0...v1.3.0) (2026-10-27)
 
 
