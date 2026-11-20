@@ -10,7 +10,12 @@ from app.services.weather.errors import CityNotFoundError, LocationNotFoundError
 from app.services.weather.providers.base import GeocodingClient, SearchResult
 from app.services.weather.schemas import CurrentWeather, DailyForecastDay, Location, Units
 from app.services.weather.service import WeatherService
-from tests.doubles import InMemoryCache, UnavailableCache
+from tests.doubles import (
+    InMemoryCache,
+    InMemoryLocationStore,
+    UnavailableCache,
+    UnavailableLocationStore,
+)
 from tests.logs import json_logs
 
 PRAGUE = Location(name="Prague", country_code="CZ", latitude=50.08, longitude=14.42)
@@ -359,3 +364,108 @@ async def test_forecast_day_without_code_has_no_description() -> None:
     result = await service.get_forecast("Prague", language=Language.UK)
 
     assert result.daily[0].description is None
+
+
+# --- stored places (weather.locations) ----------------------------------------------------
+
+KYIV = Location(
+    id=703448,
+    name="Kyiv",
+    country_code="UA",
+    latitude=50.45,
+    longitude=30.52,
+    timezone="Europe/Kyiv",
+)
+KYIV_UK = KYIV.model_copy(update={"name": "Київ"})
+
+
+async def test_get_location_reads_the_store_before_the_provider() -> None:
+    store = InMemoryLocationStore({(703448, Language.UK): KYIV_UK})
+    geocoding = FakeGeocoding([], by_id={703448: KYIV})
+    service = WeatherService(geocoding, FakeWeather(), locations=store)
+
+    place = await service.get_location(703448, language=Language.UK)
+
+    assert place == KYIV_UK
+    assert geocoding.calls == []
+
+
+async def test_a_place_missing_from_the_store_is_fetched_and_stored() -> None:
+    store = InMemoryLocationStore()
+    geocoding = FakeGeocoding([], by_id={703448: KYIV})
+    service = WeatherService(geocoding, FakeWeather(), locations=store)
+
+    place = await service.get_location(703448)
+
+    assert place == KYIV
+    assert geocoding.calls == [{"id": 703448, "language": Language.EN}]
+    assert store.places == {(703448, Language.EN): KYIV}
+
+
+async def test_a_name_in_another_language_is_fetched_once() -> None:
+    """The place is stored in English; Ukrainian names are a new row, not a stale English one."""
+    store = InMemoryLocationStore({(703448, Language.EN): KYIV})
+    geocoding = FakeGeocoding([], by_id={703448: KYIV_UK})
+    service = WeatherService(geocoding, FakeWeather(), locations=store)
+
+    assert await service.get_location(703448, language=Language.UK) == KYIV_UK
+    assert await service.get_location(703448, language=Language.UK) == KYIV_UK
+
+    assert len(geocoding.calls) == 1
+    assert store.places[703448, Language.UK] == KYIV_UK
+
+
+async def test_an_unknown_id_is_not_stored() -> None:
+    store = InMemoryLocationStore()
+    service = WeatherService(FakeGeocoding([]), FakeWeather(), locations=store)
+
+    with pytest.raises(LocationNotFoundError):
+        await service.get_location(1)
+
+    assert store.places == {}
+
+
+async def test_the_cache_is_asked_before_the_store() -> None:
+    store = InMemoryLocationStore()
+    geocoding = FakeGeocoding([], by_id={703448: KYIV})
+    service = WeatherService(geocoding, FakeWeather(), InMemoryCache(), locations=store)
+
+    await service.get_location(703448)
+    await service.get_location(703448)
+
+    assert store.gets == [(703448, Language.EN)]  # the second lookup was a cache hit
+
+
+async def test_geocoded_places_are_stored_in_the_request_language() -> None:
+    store = InMemoryLocationStore()
+    service = WeatherService(FakeGeocoding([KYIV_UK]), FakeWeather(), locations=store)
+
+    await service.get_current("Київ", language=Language.UK)
+
+    assert store.places == {(703448, Language.UK): KYIV_UK}
+
+
+async def test_search_results_are_stored() -> None:
+    lviv = KYIV.model_copy(update={"id": 702550, "name": "Lviv"})
+    store = InMemoryLocationStore()
+    service = WeatherService(FakeGeocoding([KYIV, lviv, PRAGUE]), FakeWeather(), locations=store)
+
+    await service.search_locations("Kyiv", limit=3)
+
+    # PRAGUE has no id, so there is nothing to key it by.
+    assert set(store.places) == {(703448, Language.EN), (702550, Language.EN)}
+
+
+async def test_an_unavailable_store_is_logged_and_skipped() -> None:
+    geocoding = FakeGeocoding([KYIV], by_id={703448: KYIV})
+    service = WeatherService(geocoding, FakeWeather(), locations=UnavailableLocationStore())
+
+    with json_logs() as lines:
+        by_id = await service.get_location(703448)
+        by_name = await service.get_current("Kyiv")
+
+    assert by_id == KYIV
+    assert by_name.location == KYIV
+    warnings = [line for line in lines() if line["event"] == "location_store_unavailable"]
+    assert [w["operation"] for w in warnings] == ["get", "save", "save"]
+    assert warnings[0]["level"] == "warning"

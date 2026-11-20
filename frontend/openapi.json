@@ -509,6 +509,106 @@
         }
       }
     },
+    "/api/v1/locations/{location_id}": {
+      "get": {
+        "tags": [
+          "locations"
+        ],
+        "summary": "A place by its id",
+        "description": "One place, with its names in `lang`.\n\nPlaces seen before are served from the database; others are looked up at the provider\nonce and stored. 404 `LOCATION_NOT_FOUND` when no populated place has this id.",
+        "operationId": "get_location_api_v1_locations__location_id__get",
+        "parameters": [
+          {
+            "name": "location_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "`location.id` from any other endpoint (the GeoNames id)",
+              "examples": [
+                3067696
+              ],
+              "title": "Location Id"
+            },
+            "description": "`location.id` from any other endpoint (the GeoNames id)"
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Language",
+              "description": "Language of place names, weather descriptions and unit labels",
+              "default": "en"
+            },
+            "description": "Language of place names, weather descriptions and unit labels"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Location"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No place found for the name (`CITY_NOT_FOUND`) or the id (`LOCATION_NOT_FOUND`), or the name is a country (`NOT_A_CITY`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid query parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The configured geocoding provider cannot do this, e.g. look places up by id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The upstream weather/geocoding provider failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The upstream provider did not respond in time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [

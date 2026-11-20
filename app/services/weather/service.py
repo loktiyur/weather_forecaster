@@ -1,3 +1,6 @@
+from collections.abc import Sequence
+
+import structlog
 from pydantic import TypeAdapter
 
 from app.core.cache.aside import get_or_load
@@ -7,6 +10,7 @@ from app.services.weather import cache_keys
 from app.services.weather.cache_keys import CacheTtls
 from app.services.weather.errors import LocationNotFoundError
 from app.services.weather.providers.base import GeocodingClient, WeatherClient
+from app.services.weather.repository import LocationStore, LocationStoreError
 from app.services.weather.schemas import (
     CurrentWeather,
     CurrentWeatherResponse,
@@ -17,6 +21,8 @@ from app.services.weather.schemas import (
     Units,
 )
 from app.services.weather.weather_codes import describe_weather_code
+
+log = structlog.get_logger(__name__)
 
 _location_adapter = TypeAdapter(Location)
 _current_adapter = TypeAdapter(CurrentWeather)
@@ -30,6 +36,10 @@ class WeatherService:
     `get_or_load`). The service decides what is cached, under which key and for how long
     (`cache_keys.py`); without a cache, or when it is down, the clients are simply called.
 
+    Places the geocoder returns are kept in the location store (`weather.locations`), so a
+    place looked up by id is read from there before the provider is asked. Like the cache,
+    the store is optional: when it is down, the provider answers as before.
+
     Knows nothing about HTTP requests/responses, so it can be reused (CLI, workers)
     and tested with fake clients.
     """
@@ -40,10 +50,12 @@ class WeatherService:
         weather: WeatherClient,
         cache: Cache | None = None,
         ttls: CacheTtls | None = None,
+        locations: LocationStore | None = None,
     ) -> None:
         self._geocoding = geocoding
         self._weather = weather
         self._cache = cache
+        self._locations = locations
         self.ttls = ttls or CacheTtls()
 
     async def get_current(
@@ -121,9 +133,15 @@ class WeatherService:
         country_code: str | None = None,
         language: Language = Language.EN,
     ) -> list[Location]:
-        return await self._geocoding.search(
+        places = await self._geocoding.search(
             query, count=limit, country_code=country_code, language=language
         )
+        await self._store(places, language)
+        return places
+
+    async def get_location(self, location_id: int, *, language: Language = Language.EN) -> Location:
+        """The place with this id, named in `language`; `LocationNotFoundError` if none."""
+        return await self._place(location_id, language)
 
     async def _locate(
         self,
@@ -148,17 +166,28 @@ class WeatherService:
             cache_keys.geocoding_key(city, country_code, region, language),
             self.ttls.geocoding,
             _location_adapter,
-            lambda: self._geocoding.geocode(
-                city, country_code=country_code, region=region, language=language
-            ),
+            lambda: self._geocode_and_store(city, country_code, region, language),
         )
         return location
 
+    async def _geocode_and_store(
+        self, city: str, country_code: str | None, region: str | None, language: Language
+    ) -> Location:
+        place = await self._geocoding.geocode(
+            city, country_code=country_code, region=region, language=language
+        )
+        await self._store([place], language)
+        return place
+
     async def _place(self, location_id: int, language: Language) -> Location:
         async def load() -> Location:
+            stored = await self._stored(location_id, language)
+            if stored is not None:
+                return stored
             place = await self._geocoding.get(location_id, language=language)
             if place is None:
                 raise LocationNotFoundError(location_id)
+            await self._store([place], language)
             return place
 
         location, _ = await get_or_load(
@@ -169,3 +198,22 @@ class WeatherService:
             load,
         )
         return location
+
+    async def _stored(self, location_id: int, language: Language) -> Location | None:
+        if self._locations is None:
+            return None
+        try:
+            return await self._locations.get(location_id, language)
+        except LocationStoreError as exc:
+            log.warning("location_store_unavailable", operation="get", error=str(exc))
+            return None
+
+    async def _store(self, places: Sequence[Location], language: Language) -> None:
+        """Keeps the places for later lookups by id. A failure only costs that: it is logged,
+        and the request is answered as usual."""
+        if self._locations is None or not places:
+            return
+        try:
+            await self._locations.save(places, language)
+        except LocationStoreError as exc:
+            log.warning("location_store_unavailable", operation="save", error=str(exc))

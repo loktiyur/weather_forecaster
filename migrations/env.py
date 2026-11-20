@@ -9,11 +9,10 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
+# Import every service's models here, so `alembic check` and autogenerate see their tables.
+import app.services.weather.models  # noqa: F401
 from app.core.config import get_settings
 from app.core.db import Base
-
-# Import every service's models here, so `alembic check` and autogenerate see their tables.
-# (None yet: the first table comes in Phase 8.4.)
 
 # One schema per service (ARCHITECTURE.md §8.2). Autogenerate compares only these, never
 # `public` or anything else in the database.
@@ -58,8 +57,16 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_migrations_online() -> None:
-    # NullPool: a one-off command needs one connection, not a pool that outlives it.
-    engine = create_async_engine(database_url(), poolclass=pool.NullPool)
+    engine = create_async_engine(
+        database_url(),
+        # NullPool: a one-off command needs one connection, not a pool that outlives it.
+        poolclass=pool.NullPool,
+        # Postgres's default search_path is `"$user", public`, and the database user is called
+        # `weather` like the weather service's schema. Without this, `weather` would be the
+        # connection's default schema, which autogenerate leaves out of its comparison:
+        # `alembic check` would report every table in it as missing.
+        connect_args={"server_settings": {"search_path": "public"}},
+    )
     async with engine.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await engine.dispose()

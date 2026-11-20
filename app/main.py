@@ -17,6 +17,7 @@ from app.services.weather import errors as weather_errors
 from app.services.weather.cache_keys import CacheTtls
 from app.services.weather.providers.factory import create_geocoding_client
 from app.services.weather.providers.open_meteo_weather import OpenMeteoWeatherClient
+from app.services.weather.repository import LocationRepository
 from app.services.weather.router import router as weather_router
 from app.services.weather.service import WeatherService
 
@@ -47,7 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     database = Database(settings)
     app.state.database = database
     if not await database.ping():
-        # Not fatal yet: no endpoint reads the database. Readiness reports it.
+        # Not fatal: places are then looked up at the provider only. Readiness reports it.
         log.warning("postgres_unreachable", postgres=_without_credentials(settings.database_url))
 
     async with create_http_client(settings) as http:
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             weather=OpenMeteoWeatherClient(http, settings.open_meteo_forecast_url),
             cache=cache,
             ttls=CacheTtls.from_settings(settings),
+            locations=LocationRepository(database.sessions),
         )
         try:
             yield

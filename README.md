@@ -248,6 +248,7 @@ to Open-Meteo) keep their own text, in the same format and with the same `reques
 | `GET /api/v1/weather/current` | `city` (a name, not a postal code) **or** `id` (a `location.id`, exactly that place), `country` (ISO code, e.g. `CZ`), `region` (e.g. `Texas`, picks one of several same-name places in a country), `lang` (`en` / `uk` / `cs` / `ru`), `units` (`metric` / `imperial`) |
 | `GET /api/v1/weather/forecast` | same as above + `days` (1-16, default 7) |
 | `GET /api/v1/locations/search` | `q` (required), `country`, `lang`, `limit` (1-20, default 5) |
+| `GET /api/v1/locations/{id}` | `lang`; one place by its `location.id` (from the database once it has been seen) |
 | `GET /health`, `GET /health/ready` | |
 
 ```bash
@@ -258,7 +259,16 @@ curl "http://localhost:8000/api/v1/weather/current?id=4401659&lang=uk"     # О�
 curl -G "http://localhost:8000/api/v1/weather/current" --data-urlencode "city=Київ"  # Kyiv, Ukraine
 curl "http://localhost:8000/api/v1/weather/forecast?city=Kyiv&days=3"
 curl "http://localhost:8000/api/v1/locations/search?q=Springfield&limit=3"
+curl "http://localhost:8000/api/v1/locations/703448?lang=uk"                # Київ, Україна
 ```
+
+### Stored places
+
+Every place the geocoder returns (by name, by id or in a search) is stored in PostgreSQL, keyed by
+its `location.id` (the GeoNames id): coordinates and timezone once in `weather.locations`, the
+names per language in `weather.location_names`. A lookup by id is answered from there before the
+geocoder is asked. If the database is down, places are looked up at the geocoder as before and a
+`location_store_unavailable` warning is logged.
 
 ### Caching
 
