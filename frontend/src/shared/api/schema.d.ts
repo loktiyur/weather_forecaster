@@ -71,6 +71,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/locations/{location_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A place by its id
+         * @description One place, with its names in `lang`.
+         *
+         *     Places seen before are served from the database; others are looked up at the provider
+         *     once and stored. 404 `LOCATION_NOT_FOUND` when no populated place has this id.
+         */
+        get: operations["get_location_api_v1_locations__location_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -576,6 +599,77 @@ export interface operations {
             };
             /** @description Invalid query parameters */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The upstream weather/geocoding provider failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The upstream provider did not respond in time */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_location_api_v1_locations__location_id__get: {
+        parameters: {
+            query?: {
+                /** @description Language of place names, weather descriptions and unit labels */
+                lang?: components["schemas"]["Language"];
+            };
+            header?: never;
+            path: {
+                /** @description `location.id` from any other endpoint (the GeoNames id) */
+                location_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Location"];
+                };
+            };
+            /** @description No place found for the name (`CITY_NOT_FOUND`) or the id (`LOCATION_NOT_FOUND`), or the name is a country (`NOT_A_CITY`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid query parameters */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The configured geocoding provider cannot do this, e.g. look places up by id */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

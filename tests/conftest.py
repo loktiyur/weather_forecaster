@@ -1,3 +1,4 @@
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from urllib.parse import urlparse
@@ -5,9 +6,12 @@ from urllib.parse import urlparse
 import httpx
 import pytest
 import redis.asyncio as redis
+from alembic import command
+from alembic.config import Config
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from redis.exceptions import RedisError
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from tenacity import wait_none
 
@@ -170,3 +174,40 @@ async def database() -> AsyncIterator[Database]:
 
     yield db
     await db.dispose()
+
+
+@pytest.fixture
+def alembic_config() -> Config:
+    """Like alembic.ini, minus its logging setup (tests keep their own) and with the test URL."""
+    config = Config()
+    config.set_main_option("script_location", "migrations")
+    config.set_main_option("sqlalchemy.url", TEST_DATABASE_URL)
+    return config
+
+
+@pytest.fixture
+async def migrated_database(database: Database, alembic_config: Config) -> Database:
+    """The test database with every migration applied (a no-op when it is already at head).
+
+    `db-test` keeps its data in memory, so after each container start the tables come from here.
+    """
+    # env.py starts its own event loop (as on the command line), so not on the test's loop.
+    await asyncio.to_thread(command.upgrade, alembic_config, "head")
+    return database
+
+
+# Every table the tests write to; emptied before and after each test that uses `clean_database`.
+TABLES = ("weather.location_names", "weather.locations")
+
+
+@pytest.fixture
+async def clean_database(migrated_database: Database) -> AsyncIterator[Database]:
+    """The migrated test database with empty tables, emptied again afterwards."""
+
+    async def truncate() -> None:
+        async with migrated_database.engine.begin() as connection:
+            await connection.execute(text(f"TRUNCATE {', '.join(TABLES)}"))
+
+    await truncate()
+    yield migrated_database
+    await truncate()

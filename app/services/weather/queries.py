@@ -96,3 +96,7 @@ class LocationSearchQuery(_QueryModel):
     limit: int = Field(
         default=5, ge=1, le=MAX_SEARCH_RESULTS, description="Maximum number of results"
     )
+
+
+class LocationQuery(_QueryModel):
+    lang: Lang = Language.EN

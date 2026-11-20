@@ -10,18 +10,9 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
 from app.core.db import Database
-from tests.conftest import TEST_DATABASE_URL
 
 SERVICE_SCHEMAS = {"weather"}
-
-
-@pytest.fixture
-def alembic_config() -> Config:
-    """Like alembic.ini, minus its logging setup (tests keep their own) and with the test URL."""
-    config = Config()
-    config.set_main_option("script_location", "migrations")
-    config.set_main_option("sqlalchemy.url", TEST_DATABASE_URL)
-    return config
+TABLES = {"weather.locations", "weather.location_names"}
 
 
 def test_the_history_has_one_head(alembic_config: Config) -> None:
@@ -43,6 +34,18 @@ async def schemas(database: Database) -> set[str]:
         return set(rows) & SERVICE_SCHEMAS
 
 
+async def tables(database: Database) -> set[str]:
+    async with database.engine.connect() as connection:
+        rows = await connection.scalars(
+            text(
+                "SELECT table_schema || '.' || table_name FROM information_schema.tables "
+                "WHERE table_schema = ANY(:schemas)"
+            ),
+            {"schemas": list(SERVICE_SCHEMAS)},
+        )
+        return set(rows)
+
+
 @pytest.fixture
 async def migrated(database: Database, alembic_config: Config) -> AsyncIterator[None]:
     """Leaves the test database at head, as the other Postgres tests expect it."""
@@ -59,6 +62,7 @@ async def test_upgrade_to_head_and_downgrade_to_base(
 
     await run(command.upgrade, alembic_config, "head")
     assert await schemas(database) == SERVICE_SCHEMAS
+    assert await tables(database) == TABLES
 
     await run(command.downgrade, alembic_config, "base")
     assert await schemas(database) == set()

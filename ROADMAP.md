@@ -239,9 +239,13 @@ Branch: `phase-8.3-alembic` · PR title `build: …` (no release)
 ### 8.4 — Places table
 Branch: `phase-8.4-locations-table` · PR title `feat: …` (minor release)
 
-- [ ] `weather.locations`: places stored once, keyed by the GeoNames id the API already returns as `location.id` (Phase 5), upserted from geocoding results (`INSERT … ON CONFLICT`); primary key on the id, `UNIQUE (provider_id)`
-- [ ] `GET /api/v1/locations/{id}`; lookups by id are served from the table before asking the provider
-- [ ] Integration tests for the repository (upsert, lookup by id)
+- [x] `weather.locations`: places stored once, keyed by the GeoNames id the API already returns as `location.id` (Phase 5), upserted from geocoding results (`INSERT … ON CONFLICT`); primary key on the id. No separate `provider_id`: both providers return GeoNames ids, so the id already is the provider's id
+- [x] `weather.location_names`: the names (place, country, region) per place and language, primary key `(location_id, language)`, `ON DELETE CASCADE`; one name column could serve only one of the four languages
+- [x] `CHECK` constraints on coordinates and language
+- [x] `GET /api/v1/locations/{id}?lang=`; lookups by id are served from the table before asking the provider (after the Redis cache); places from geocoding by name and from searches are stored too
+- [x] The table is optional like the cache: if Postgres is down, the provider answers and `location_store_unavailable` is logged
+- [x] Integration tests for the repository (upsert, names per language, lookup by id, constraints) and for the request path through the real database
+- [x] Alembic connects with `search_path=public`: the database user is called `weather` like the schema, so `"$user"` made `weather` the default schema, which `alembic check` leaves out
 
 ---
 

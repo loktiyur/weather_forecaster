@@ -221,7 +221,7 @@ Both apps run on the host and reload on save; Docker runs only the infrastructur
 
 ---
 
-## 5. Backend today (after Phase 8.2)
+## 5. Backend today (after Phase 8.4)
 
 The §6 layout with only the parts that exist so far. `core/events.py`, `core/auth/` and the `trips` and `stats` services are added in the phases that need them (ROADMAP.md).
 
@@ -232,7 +232,7 @@ app/
 ├── core/                    # infrastructure, no features
 │   ├── config.py            # Settings
 │   ├── cache/               # base.py (Cache), redis.py (RedisCache), aside.py (get_or_load)
-│   ├── db.py                # Postgres: Database (engine + sessions), get_session, Base (no models yet)
+│   ├── db.py                # Postgres: Database (engine + sessions), get_session, Base
 │   ├── http.py              # shared httpx client + get_json (with retries)
 │   ├── errors.py            # the error format, shared exception handlers, error_docs()
 │   ├── exceptions.py        # shared exceptions (upstream failures)
@@ -245,7 +245,9 @@ app/
         ├── router.py        # /weather/*, /locations/*
         ├── queries.py       # query parameter models
         ├── dependencies.py  # WeatherServiceDep
-        ├── service.py       # WeatherService: geocode → weather, through the cache
+        ├── service.py       # WeatherService: geocode → weather, through the cache and stored places
+        ├── models.py        # SQLAlchemy models: weather.locations, weather.location_names
+        ├── repository.py    # LocationStore interface + LocationRepository (the SQL)
         ├── cache_keys.py    # key layout and TTLs
         ├── errors.py        # CityNotFoundError, NotACityError, ... and their HTTP mapping
         ├── schemas.py       # Location and weather models: the API contract
@@ -259,8 +261,11 @@ app/
 | **Service** (`service.py`, `cache_keys.py`) | The flow: cache → geocode → cache → weather; what is cached for how long | HTTP requests/responses |
 | **Providers** (`providers/`) | One external API each: URL, params, JSON → model | Caching, callers |
 | **Cache** (`core/cache`) | Redis commands, expiry on write, cache-aside | Which data is cached for how long |
+| **Repository** (`repository.py`, `models.py`) | Tables and SQL (upserts, joins) | HTTP, providers, the cache |
 
-Every dependency (HTTP client, Redis, settings, the service) is created once in the FastAPI **lifespan** and injected with `Depends(...)`, so tests can replace any of them. `WeatherService` depends on interfaces (`GeocodingClient`, `WeatherClient`, `Cache`), not on concrete classes.
+Every dependency (HTTP client, Redis, settings, the service) is created once in the FastAPI **lifespan** and injected with `Depends(...)`, so tests can replace any of them. `WeatherService` depends on interfaces (`GeocodingClient`, `WeatherClient`, `Cache`, `LocationStore`), not on concrete classes.
+
+A lookup by id goes Redis → `weather.locations` → provider, and every place the provider returns is upserted into the table. Like the cache, the table is optional at runtime: a database error is logged (`location_store_unavailable`) and the provider answers.
 
 Until Phase 7 the code was grouped by kind (`api/`, `clients/`, `cache/`, `schemas/`); the move changed no behaviour, and the OpenAPI schema stayed byte-for-byte the same.
 
@@ -479,6 +484,7 @@ erDiagram
     AUTH_USERS ||--o{ TRIPS_TRIPS : plans
     AUTH_USERS |o--o{ STATS_SEARCH_EVENTS : "optional"
     TRIPS_TRIPS ||--|{ TRIPS_TRIP_STOPS : has
+    WEATHER_LOCATIONS ||--|{ WEATHER_LOCATION_NAMES : "named in"
     WEATHER_LOCATIONS ||--o{ WEATHER_FAVOURITE_PLACES : ""
     WEATHER_LOCATIONS ||--o{ TRIPS_TRIP_STOPS : ""
     WEATHER_LOCATIONS |o--o{ STATS_SEARCH_EVENTS : ""
@@ -491,14 +497,20 @@ erDiagram
         timestamptz created_at
     }
     WEATHER_LOCATIONS {
-        bigint id PK
-        text provider_id UK "id from the geocoding provider"
-        text name
-        text country_code
-        text region
+        bigint id PK "GeoNames id = location.id in the API"
+        text country_code "ISO-2"
         float latitude
         float longitude
         text timezone
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    WEATHER_LOCATION_NAMES {
+        bigint location_id PK, FK
+        text language PK "en, uk, cs, ru"
+        text name
+        text country
+        text region
     }
     WEATHER_FAVOURITE_PLACES {
         uuid user_id PK, FK
@@ -561,7 +573,8 @@ Together they mean a trip read in `stop_order` is always a valid itinerary, whic
 |----------|--------|--------|
 | Saved places | Table `weather.favourite_places` with `UNIQUE(user_id, location_id)` and FKs | Fixed shape, points at another table: the database guarantees no duplicates and no dangling ids, and "how many users saved Prague" is a plain `GROUP BY`. A JSONB array on the user would lose all of that |
 | User preferences | `auth.users.preferences JSONB`, validated by a Pydantic model | Small, optional, belongs to the user, nothing references it, and new settings need no migration. The right job for JSONB |
-| Places | Stored once in `weather.locations`, upserted from geocoding results | Stable ids for REST resources (`/locations/{id}`), and trips, saved places and statistics all reference the same row |
+| Places | Stored once in `weather.locations`, keyed by the GeoNames id, upserted from geocoding results | Stable ids for REST resources (`/locations/{id}`), and trips, saved places and statistics all reference the same row. Both providers return GeoNames ids, so no separate provider id is needed |
+| Place names | `weather.location_names`, one row per place and language | Names differ per language (Kyiv / Київ). A place is the same in every language, so the coordinates stay in one row that everything references; a language not stored yet is fetched once and added |
 | Trip stops | Required dates; `stop_order` with `UNIQUE(trip_id, stop_order)`; stays may share only a boundary day | See "Trip stops" below |
 | Search events | Written by an event handler, aggregated with SQL | Weather stays independent of statistics; statistics are flexible queries (time windows, per country) over raw events |
 
@@ -663,6 +676,7 @@ Base path `/api/v1`. Interactive docs at `/docs` (Swagger) and `/redoc`.
 | `GET` | `/api/v1/weather/current` | `city` (1–100 chars with a letter) **or** `id` (a `location.id`: exactly that place), `country` (ISO-2), `region` (picks one of several same-name places in a country), `lang` (`en` \| `uk` \| `cs` \| `ru`), `units` (`metric` \| `imperial`) | Current weather |
 | `GET` | `/api/v1/weather/forecast` | same + `days` (1–16, default 7) | Daily forecast |
 | `GET` | `/api/v1/locations/search` | `q`, `country`, `lang`, `limit` (1–20, default 5) | Candidate places for an ambiguous name, populated places only; `{"results": [...]}` |
+| `GET` | `/api/v1/locations/{id}` | `lang` | One place by its `location.id` (from Phase 8.4), served from `weather.locations` once seen; `404 LOCATION_NOT_FOUND` |
 | `GET` | `/health` | — | Liveness |
 | `GET` | `/health/ready` | — | Readiness: Redis and Postgres (from Phase 8.2) reachable, `503` otherwise |
 
@@ -671,7 +685,7 @@ Base path `/api/v1`. Interactive docs at `/docs` (Swagger) and `/redoc`.
 | Service | Endpoints |
 |---------|-----------|
 | core/auth | `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /me` · `PATCH /me/preferences` |
-| weather | `GET /locations/{id}` · `GET/POST /me/places` · `PATCH/DELETE /me/places/{location_id}` · `GET /me/dashboard` |
+| weather | `GET/POST /me/places` · `PATCH/DELETE /me/places/{location_id}` · `GET /me/dashboard` |
 | trips | `GET/POST /me/trips` · `GET/PATCH/DELETE /me/trips/{id}` · `POST/PATCH/DELETE /me/trips/{id}/stops…` · `GET /me/trips/{id}/forecast` |
 | stats | `GET /stats/popular?since=7d&country=CZ` · `GET /me/stats` |
 

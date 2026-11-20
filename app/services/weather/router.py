@@ -1,13 +1,19 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Path, Query, Response
 
 from app.services.weather.dependencies import WeatherServiceDep
 from app.services.weather.errors import error_docs
-from app.services.weather.queries import ForecastQuery, LocationSearchQuery, WeatherQuery
+from app.services.weather.queries import (
+    ForecastQuery,
+    LocationQuery,
+    LocationSearchQuery,
+    WeatherQuery,
+)
 from app.services.weather.schemas import (
     CurrentWeatherResponse,
     ForecastResponse,
+    Location,
     LocationSearchResponse,
 )
 
@@ -88,6 +94,37 @@ async def search_locations(
         query.q, limit=query.limit, country_code=query.country, language=query.lang
     )
     return LocationSearchResponse(results=results)
+
+
+# After /search: a path is matched in the order the routes were added, so "search" never
+# reaches this route as an id.
+@locations.get(
+    "/{location_id}",
+    response_model=Location,
+    summary="A place by its id",
+    responses=error_docs(404, 422, 501, 502, 504),
+)
+async def get_location(
+    location_id: Annotated[
+        int,
+        Path(
+            ge=1,
+            description="`location.id` from any other endpoint (the GeoNames id)",
+            examples=[3067696],
+        ),
+    ],
+    query: Annotated[LocationQuery, Query()],
+    service: WeatherServiceDep,
+    response: Response,
+) -> Location:
+    """One place, with its names in `lang`.
+
+    Places seen before are served from the database; others are looked up at the provider
+    once and stored. 404 `LOCATION_NOT_FOUND` when no populated place has this id.
+    """
+    result = await service.get_location(location_id, language=query.lang)
+    response.headers["Cache-Control"] = cache_control(service.ttls.geocoding)
+    return result
 
 
 # Included by main.py under /api/v1, in this order (it is the order in /docs).
