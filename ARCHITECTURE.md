@@ -870,7 +870,7 @@ Pull requests run only the jobs whose files changed; pushes to `main` (every mer
 |-----|-------|------|
 | `Lint, type-check, test` | ruff, format check, mypy strict, `Architecture` (import-linter, from Phase 7), unit + API tests | Phase 0 |
 | `Redis integration` | `redis:7.4-alpine` service container, all tests except the Postgres ones, with coverage | Phase 3 |
-| `Docker image` | build the `api` (and `web` from Phase 5) images, start the `full` profile, run `scripts/smoke_test.sh`: readiness, a real weather request, the cache hit, the error format (and the web page from Phase 5) | Phase 4 |
+| `Docker image` | build the `api` (and `web` from Phase 5) images, start the `full` profile, run `scripts/smoke_test.sh`: readiness, a real weather request and the cache hit (skipped with a warning when Open-Meteo is unreachable), the error format (and the web page and the `/api` proxy from Phase 5) | Phase 4 |
 | `Frontend` | generated API types match the backend code, ESLint, Prettier, `vue-tsc`, Vitest, build | Phase 5 |
 | `Postgres integration` | `postgres:16-alpine` service container, `alembic upgrade head`, `alembic check` (models and migrations in sync, from Phase 8.3), Postgres integration tests with coverage | Phase 8.2 |
 | `Coverage` | merges the coverage data of `Redis integration` (all tests but Postgres) and `Postgres integration`, applies the 80 % gate (before Phase 8.3 the gate ran in `Redis integration`) | Phase 8.3 |

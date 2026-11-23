@@ -197,7 +197,10 @@ docker compose --profile full down             # stop everything
   return `503`, but the container stays healthy and keeps answering (without Redis, just without the cache).
 
 `poe smoke-test` calls the real Open-Meteo API once, because its job is to prove the running
-container works end to end; the test suite itself never calls external APIs.
+container works end to end; the test suite itself never calls external APIs. When Open-Meteo
+cannot be reached (the API answers `502`/`504` `UPSTREAM_*`), the smoke test prints a warning and
+skips the weather and cache checks instead of failing, so an outage at the provider never blocks
+CI or the publishing of release images.
 
 ## Logs
 
