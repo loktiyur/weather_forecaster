@@ -91,6 +91,11 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql+asyncpg://weather:weather@db:5432/weather_app
+      # The image runs with APP_ENV=prod, which needs a JWT_SECRET of its own. This default is
+      # for the local stack only; a real deployment sets JWT_SECRET.
+      JWT_SECRET: ${JWT_SECRET:-local-compose-stack-secret-not-for-real-use}
+      # http://localhost:8080 is plain HTTP; browsers other than Chrome drop Secure cookies there.
+      COOKIE_SECURE: "false"
     depends_on:
       redis:
         condition: service_healthy

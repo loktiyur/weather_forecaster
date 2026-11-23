@@ -4,6 +4,10 @@ from typing import Literal, Self
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Signs login tokens in development and tests only: the API refuses to start with it when
+# APP_ENV=prod (app/main.py).
+DEV_JWT_SECRET = "dev-only-jwt-secret-do-not-use-in-production"
+
 
 class Settings(BaseSettings):
     """Application settings, read from environment variables and the `.env` file."""
@@ -33,6 +37,12 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://weather:weather@localhost:5432/weather_app"
     # Connecting and the readiness ping give up after this; requests then fail instead of hanging.
     database_timeout_seconds: float = 2.0
+
+    jwt_secret: str = DEV_JWT_SECRET
+    jwt_ttl_minutes: int = 60
+    # The login cookie is sent over HTTPS only. false for plain-HTTP setups such as the full
+    # profile on http://localhost:8080 (Safari drops Secure cookies there).
+    cookie_secure: bool = True
 
     cache_ttl_geocoding_seconds: int = 7 * 24 * 3600
     cache_ttl_current_seconds: int = 600

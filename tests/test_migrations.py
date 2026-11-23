@@ -11,8 +11,8 @@ from sqlalchemy import text
 
 from app.core.db import Database
 
-SERVICE_SCHEMAS = {"weather"}
-TABLES = {"weather.locations", "weather.location_names"}
+SERVICE_SCHEMAS = {"auth", "weather"}
+TABLES = {"auth.users", "weather.locations", "weather.location_names"}
 
 
 def test_the_history_has_one_head(alembic_config: Config) -> None:

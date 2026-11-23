@@ -249,6 +249,8 @@ to Open-Meteo) keep their own text, in the same format and with the same `reques
 | `GET /api/v1/weather/forecast` | same as above + `days` (1-16, default 7) |
 | `GET /api/v1/locations/search` | `q` (required), `country`, `lang`, `limit` (1-20, default 5) |
 | `GET /api/v1/locations/{id}` | `lang`; one place by its `location.id` (from the database once it has been seen) |
+| `POST /api/v1/auth/register`, `POST /api/v1/auth/login` | JSON body `{"email", "password"}` (password 8-128 characters); both log in |
+| `POST /api/v1/auth/logout`, `GET /api/v1/me` | the logged-in user (`401` without a valid login cookie) |
 | `GET /health`, `GET /health/ready` | |
 
 ```bash
@@ -261,6 +263,24 @@ curl "http://localhost:8000/api/v1/weather/forecast?city=Kyiv&days=3"
 curl "http://localhost:8000/api/v1/locations/search?q=Springfield&limit=3"
 curl "http://localhost:8000/api/v1/locations/703448?lang=uk"                # Київ, Україна
 ```
+
+### Accounts and login
+
+Logging in sets the cookie `access_token`: a JWT valid for `JWT_TTL_MINUTES` (default 60),
+`HttpOnly` (page scripts cannot read it), `SameSite=Lax`, `Secure` unless `COOKIE_SECURE=false`,
+sent only to `/api`. Passwords are stored as Argon2 hashes. With `curl`, a cookie jar keeps the
+login between calls:
+
+```bash
+curl -c jar -H "Content-Type: application/json" \
+  -d '{"email": "anna@example.com", "password": "correct horse"}' \
+  http://localhost:8000/api/v1/auth/register
+curl -b jar http://localhost:8000/api/v1/me
+curl -b jar -c jar -X POST http://localhost:8000/api/v1/auth/logout
+```
+
+In production (`APP_ENV=prod`, as in the API image) the API refuses to start without its own
+`JWT_SECRET`; the full profile in `docker-compose.yml` sets one for the local stack.
 
 ### Stored places
 

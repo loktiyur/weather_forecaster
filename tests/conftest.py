@@ -197,7 +197,7 @@ async def migrated_database(database: Database, alembic_config: Config) -> Datab
 
 
 # Every table the tests write to; emptied before and after each test that uses `clean_database`.
-TABLES = ("weather.location_names", "weather.locations")
+TABLES = ("auth.users", "weather.location_names", "weather.locations")
 
 
 @pytest.fixture

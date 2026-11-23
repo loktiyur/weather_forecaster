@@ -6,8 +6,9 @@ import structlog
 from fastapi import APIRouter, FastAPI
 
 from app.core import errors
+from app.core.auth.router import router as auth_router
 from app.core.cache.redis import RedisCache, create_redis_client
-from app.core.config import Settings, get_settings
+from app.core.config import DEV_JWT_SECRET, Settings, get_settings
 from app.core.db import Database
 from app.core.health import router as health_router
 from app.core.http import create_http_client
@@ -28,6 +29,7 @@ API_V1_PREFIX = "/api/v1"
 TAGS_METADATA = [
     {"name": "weather", "description": "Current weather and daily forecast for a city."},
     {"name": "locations", "description": "Resolve and disambiguate place names."},
+    {"name": "auth", "description": "Accounts and login (a cookie)."},
     {"name": "health", "description": "Service status checks."},
 ]
 
@@ -39,6 +41,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     The one place that wires `core` and the services together (the composition root).
     """
     settings: Settings = app.state.settings
+    if settings.app_env == "prod" and settings.jwt_secret == DEV_JWT_SECRET:
+        # Anyone could sign login tokens with the public development secret.
+        raise RuntimeError("Set JWT_SECRET: the development secret is not allowed in prod")
     redis_client = create_redis_client(settings)
     cache = RedisCache(redis_client)
     app.state.cache = cache
@@ -95,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     api_v1 = APIRouter(prefix=API_V1_PREFIX)
     api_v1.include_router(weather_router)
+    api_v1.include_router(auth_router)
     app.include_router(api_v1)
     app.include_router(health_router)
     return app

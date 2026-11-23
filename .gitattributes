@@ -1,0 +1,3 @@
+# Generated from the backend (poe generate-api): collapsed in GitHub diffs, never edited by hand.
+frontend/openapi.json linguist-generated=true
+frontend/src/shared/api/schema.d.ts linguist-generated=true
