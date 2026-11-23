@@ -42,8 +42,10 @@ class ErrorResponse(BaseModel):
 
 
 HTTP_ERROR_CODES = {
+    status.HTTP_401_UNAUTHORIZED: "UNAUTHORIZED",
     status.HTTP_404_NOT_FOUND: "NOT_FOUND",
     status.HTTP_405_METHOD_NOT_ALLOWED: "METHOD_NOT_ALLOWED",
+    status.HTTP_409_CONFLICT: "CONFLICT",
 }
 
 # OpenAPI descriptions of the errors any endpoint can return; services add their own.

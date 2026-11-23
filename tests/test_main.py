@@ -61,6 +61,14 @@ async def test_lifespan_wires_the_real_service(
     assert service._weather._http.is_closed  # type: ignore[attr-defined]
 
 
+async def test_prod_refuses_the_development_jwt_secret(settings: Settings) -> None:
+    app = create_app(settings.model_copy(update={"app_env": "prod"}))
+
+    with pytest.raises(RuntimeError, match="Set JWT_SECRET"):
+        async with lifespan(app):
+            pass
+
+
 def test_api_version_matches_pyproject() -> None:
     # The release workflow checks the tag against pyproject.toml; /docs must show the same.
     with open("pyproject.toml", "rb") as file:

@@ -250,19 +250,41 @@ Branch: `phase-8.4-locations-table` · PR title `feat: …` (minor release)
 ---
 
 ## Phase 9 — Authentication
-Branch: `phase-9-auth`
 
-- [ ] `app/core/auth/`: schema `auth`, table `users` (email unique, password hash, `preferences JSONB`, timestamps)
-- [ ] Password hashing with Argon2 (`pwdlib`)
-- [ ] `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/me`
-- [ ] JWT (`PyJWT`) in an **httpOnly, Secure, SameSite=Lax cookie**, not readable by page scripts
-- [ ] `current_user` / `optional_user` dependencies for the services
-- [ ] `PATCH /api/v1/me/preferences`: validated by a Pydantic model (units, language, home place); weather endpoints use the user's units when `units` is not given
-- [ ] Frontend (`features/auth/`): register / login / logout, user menu, preferences page
-- [ ] Frontend: `GET /me` on start into a Pinia user store; `meta.requiresAuth` routes with a guard redirecting guests to `/login?next=…`; any `401` clears the store and redirects the same way
-- [ ] Frontend: preferences from `localStorage` for guests; after login the saved ones from `/me` take over, changes go to `PATCH /me/preferences`
+Three pull requests: two for the backend, one for the frontend, so security-sensitive backend code and UI code are reviewed separately. **An exception to "each phase includes its frontend page":** after 9.1 and 9.2, login and preferences can be used through the API (Swagger at `/docs`, `curl`); the app gets its pages in 9.3. Each backend PR still regenerates the frontend's API types (`poe generate-api`), because the `Frontend` job's "API types up to date" check fails otherwise.
 
-**CI additions:** auth tests (hashing, token expiry, cookie flags, protected routes return `401`)
+### 9.1 — Auth backend
+Branch: `phase-9.1-auth-backend` · PR title `feat: …` (minor release)
+
+- [x] `app/core/auth/`: schema `auth`, table `users` (email unique and stored lower-case, password hash, `preferences JSONB`, `created_at`); its migration
+- [x] Password hashing with Argon2 (`pwdlib`); a login with an unknown email checks a dummy hash, so the response time does not reveal who has an account
+- [x] `POST /api/v1/auth/register` (logs in too), `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/me`; errors in the shared format (`401 UNAUTHORIZED`, `409 CONFLICT`)
+- [x] JWT (`PyJWT`) in an **httpOnly, Secure, SameSite=Lax cookie**, not readable by page scripts; settings `JWT_SECRET`, `JWT_TTL_MINUTES`, `COOKIE_SECURE`; the API refuses the development secret with `APP_ENV=prod`
+- [x] `current_user` / `optional_user` dependencies for the services (`CurrentUser`, `OptionalUser`)
+- [x] Tests: hashing and tokens (expired, tampered, wrong algorithm); the endpoints against the real test Postgres: cookie flags, duplicate emails, failed logins, protected routes return `401`
+- [x] `.gitattributes` marks the generated API types, so GitHub collapses them in reviews
+
+**CI additions:** import-linter contract "only `core/auth/security.py` imports `jwt` and `pwdlib`"; coverage traces greenlets (SQLAlchemy's async layer)
+
+### 9.2 — Preferences backend
+Branch: `phase-9.2-preferences-backend` · PR title `feat: …` (minor release)
+
+- [ ] `PATCH /api/v1/me/preferences`: validated by a Pydantic model (units, language, home place), stored in `auth.users.preferences`; `GET /me` returns them
+- [ ] Weather endpoints use the logged-in user's units when `units` is not given (`optional_user`); guests keep the default
+- [ ] Tests: validation (`422`), partial updates keep the other preferences, weather units for users and guests
+
+**CI additions:** none beyond new tests
+
+### 9.3 — Auth frontend
+Branch: `phase-9.3-auth-frontend` · PR title `feat: …` (minor release)
+
+- [ ] `features/auth/`: register / login / logout, user menu, preferences page
+- [ ] `GET /me` on start into a Pinia user store; `meta.requiresAuth` routes with a guard redirecting guests to `/login?next=…`; any `401` clears the store and redirects the same way
+- [ ] Preferences from `localStorage` for guests; after login the saved ones from `/me` take over, changes go to `PATCH /me/preferences`
+- [ ] Texts in all four languages; Vitest tests for the pages, the store, the guard and the `401` handling
+- [ ] Small API changes the UI turns out to need are part of this PR
+
+**CI additions:** none beyond new tests
 
 ---
 

@@ -221,15 +221,17 @@ Both apps run on the host and reload on save; Docker runs only the infrastructur
 
 ---
 
-## 5. Backend today (after Phase 8.4)
+## 5. Backend today (after Phase 9.1)
 
-The §6 layout with only the parts that exist so far. `core/events.py`, `core/auth/` and the `trips` and `stats` services are added in the phases that need them (ROADMAP.md).
+The §6 layout with only the parts that exist so far. `core/events.py` and the `trips` and `stats` services are added in the phases that need them (ROADMAP.md).
 
 ```
 app/
 ├── main.py                  # composition root: the lifespan creates the HTTP client, Redis, the
 │                            #   Database and WeatherService; includes the routers
 ├── core/                    # infrastructure, no features
+│   ├── auth/                # security.py (Argon2, JWT), models.py (auth.users), service.py
+│   │                        #   (register, log in), router.py (endpoints, CurrentUser, OptionalUser)
 │   ├── config.py            # Settings
 │   ├── cache/               # base.py (Cache), redis.py (RedisCache), aside.py (get_or_load)
 │   ├── db.py                # Postgres: Database (engine + sessions), get_session, Base
@@ -491,8 +493,8 @@ erDiagram
 
     AUTH_USERS {
         uuid id PK
-        text email UK
-        text password_hash
+        text email UK "stored lower-case (CHECK)"
+        text password_hash "Argon2"
         jsonb preferences "units, language, home place"
         timestamptz created_at
     }
@@ -835,9 +837,9 @@ All settings come from environment variables (`.env` locally, secrets manager in
 | `DATABASE_URL` | `postgresql+asyncpg://weather:weather@localhost:5432/weather_app` | Postgres (`…@db:5432/weather_app` inside compose) | v2.0 (Phase 8.1) |
 | `DATABASE_TIMEOUT_SECONDS` | `2` | connecting and the readiness ping give up after this | v2.0 (Phase 8.2) |
 | `TEST_DATABASE_URL` | `…@localhost:5433/weather_app_test` | tests only (read by the test fixture, like `TEST_REDIS_URL`) | v2.0 (Phase 8.2) |
-| `JWT_SECRET` | (secret) | signs login tokens; never committed | v2.0 |
-| `JWT_TTL_MINUTES` | `60` | login lifetime | v2.0 |
-| `COOKIE_SECURE` | `true` | `false` only for local HTTP | v2.0 |
+| `JWT_SECRET` | (secret) | signs login tokens; never committed; the API refuses the development default with `APP_ENV=prod` | v2.0 (Phase 9.1) |
+| `JWT_TTL_MINUTES` | `60` | login lifetime | v2.0 (Phase 9.1) |
+| `COOKIE_SECURE` | `true` | `false` only for local HTTP | v2.0 (Phase 9.1) |
 
 ---
 

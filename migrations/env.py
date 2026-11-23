@@ -10,13 +10,14 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
 # Import every service's models here, so `alembic check` and autogenerate see their tables.
+import app.core.auth.models
 import app.services.weather.models  # noqa: F401
 from app.core.config import get_settings
 from app.core.db import Base
 
 # One schema per service (ARCHITECTURE.md §8.2). Autogenerate compares only these, never
 # `public` or anything else in the database.
-SERVICE_SCHEMAS = {"weather"}
+SERVICE_SCHEMAS = {"auth", "weather"}
 
 config = context.config
 
