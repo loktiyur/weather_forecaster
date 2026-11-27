@@ -6,7 +6,8 @@ from pydantic import BaseModel, ValidationError
 
 from app.core.exceptions import UpstreamServiceError
 from app.core.http import get_json
-from app.services.weather.schemas import CurrentWeather, DailyForecastDay, Units
+from app.core.units import Units
+from app.services.weather.schemas import CurrentWeather, DailyForecastDay
 from app.services.weather.weather_codes import describe_weather_code
 
 SERVICE = "Open-Meteo Forecast"

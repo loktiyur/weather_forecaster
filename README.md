@@ -39,6 +39,14 @@ Released versions can also run from the published images, without building:
 - Node.js 24+ and npm (for the web frontend)
 - Docker with Docker Compose (for Redis and PostgreSQL, and to run the whole app in containers)
 
+The commands in this README carry comments after `#`. zsh (the macOS default shell) ignores them
+only with the option `interactive_comments`; without it, pasted lines fail with errors like
+`zsh: no matches found` or `curl: Could not resolve host`. Turn it on once:
+
+```bash
+echo 'setopt interactive_comments' >> ~/.zshrc && source ~/.zshrc
+```
+
 ## Setup
 
 ```bash
@@ -253,7 +261,8 @@ to Open-Meteo) keep their own text, in the same format and with the same `reques
 | `GET /api/v1/locations/search` | `q` (required), `country`, `lang`, `limit` (1-20, default 5) |
 | `GET /api/v1/locations/{id}` | `lang`; one place by its `location.id` (from the database once it has been seen) |
 | `POST /api/v1/auth/register`, `POST /api/v1/auth/login` | JSON body `{"email", "password"}` (password 8-128 characters); both log in |
-| `POST /api/v1/auth/logout`, `GET /api/v1/me` | the logged-in user (`401` without a valid login cookie) |
+| `POST /api/v1/auth/logout`, `GET /api/v1/me` | the logged-in user with their preferences (`401` without a valid login cookie) |
+| `PATCH /api/v1/me/preferences` | JSON body with any of `units`, `language`; only the fields sent change, `null` removes a choice |
 | `GET /health`, `GET /health/ready` | |
 
 ```bash
@@ -271,15 +280,36 @@ curl "http://localhost:8000/api/v1/locations/703448?lang=uk"                # К
 
 Logging in sets the cookie `access_token`: a JWT valid for `JWT_TTL_MINUTES` (default 60),
 `HttpOnly` (page scripts cannot read it), `SameSite=Lax`, `Secure` unless `COOKIE_SECURE=false`,
-sent only to `/api`. Passwords are stored as Argon2 hashes. With `curl`, a cookie jar keeps the
-login between calls:
+sent only to `/api`. Passwords are stored as Argon2 hashes.
+
+A logged-in user can save `units` and `language`. When a weather request has no `units`, the API
+answers in the user's saved units (guests: metric); such answers carry `Cache-Control: private`,
+because they depend on who is logged in. The language is stored for the frontend, which sends
+`lang` with every request.
+
+With `curl`, a cookie jar (the file `jar`) keeps the login between calls. Run the steps in this
+order. The demo account is created by the first run; for an account of your own, use its email and
+password in `DEMO`:
 
 ```bash
-curl -c jar -H "Content-Type: application/json" \
-  -d '{"email": "anna@example.com", "password": "correct horse"}' \
-  http://localhost:8000/api/v1/auth/register
-curl -b jar http://localhost:8000/api/v1/me
-curl -b jar -c jar -X POST http://localhost:8000/api/v1/auth/logout
+API=http://localhost:8000/api/v1
+DEMO='{"email": "demo@example.com", "password": "correct horse"}'
+
+# 1. Log in: register the first time (it logs in too) ...
+curl -c jar -H "Content-Type: application/json" -d "$DEMO" $API/auth/register
+# ... or, when the account exists already (register answers 409), log in:
+curl -c jar -H "Content-Type: application/json" -d "$DEMO" $API/auth/login
+curl -b jar $API/me                                        # the user and their preferences
+
+# 2. Save a preference; weather without `units` then uses it
+curl -b jar -X PATCH -H "Content-Type: application/json" \
+  -d '{"units": "imperial"}' $API/me/preferences
+curl -i -b jar "$API/weather/current?city=Prague"          # °F, Cache-Control: private
+curl -i "$API/weather/current?city=Prague"                 # as a guest: °C, still private
+
+# 3. Log out: the jar loses the cookie, /me answers 401
+curl -b jar -c jar -X POST $API/auth/logout
+curl -b jar $API/me
 ```
 
 In production (`APP_ENV=prod`, as in the API image) the API refuses to start without its own

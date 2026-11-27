@@ -23,7 +23,7 @@ The goal of the project is to show understanding of **API design**, of the **pop
 | F2 | The user can see a daily forecast for 1–16 days (min/max temperature, humidity, sunrise/sunset). | v1.0 |
 | F3 | Ambiguous names are handled: the user sees *which* place was used and can pick another one (e.g. Paris, France vs Paris, Texas). | v1.0 |
 | F4 | A web page lets the user do all of the above without tools like curl. | v1.0 |
-| F5 | Users can register, log in and set preferences (units, language, home place). | v2.0 |
+| F5 | Users can register, log in and set preferences (units, language; a home place with the dashboard). | v2.0 |
 | F6 | Users can build trips from stops (place + dates) and see the weather for every stop on its own dates. | v2.0 |
 | F7 | Users can save places and see the current weather for all of them on a dashboard. | v2.0 |
 | F8 | Users see statistics about their searches; everyone sees the most popular places. | v2.0 |
@@ -221,7 +221,7 @@ Both apps run on the host and reload on save; Docker runs only the infrastructur
 
 ---
 
-## 5. Backend today (after Phase 9.1)
+## 5. Backend today (after Phase 9.2)
 
 The §6 layout with only the parts that exist so far. `core/events.py` and the `trips` and `stats` services are added in the phases that need them (ROADMAP.md).
 
@@ -240,6 +240,7 @@ app/
 │   ├── exceptions.py        # shared exceptions (upstream failures)
 │   ├── health.py            # /health, /health/ready (pings the cache and the database)
 │   ├── language.py          # Language: en / uk / cs / ru
+│   ├── units.py             # Units: metric / imperial (weather and user preferences)
 │   ├── logging.py           # structlog setup
 │   └── middleware.py        # request id + access log
 └── services/
@@ -495,7 +496,7 @@ erDiagram
         uuid id PK
         text email UK "stored lower-case (CHECK)"
         text password_hash "Argon2"
-        jsonb preferences "units, language, home place"
+        jsonb preferences "only the chosen: units, language"
         timestamptz created_at
     }
     WEATHER_LOCATIONS {
@@ -574,7 +575,7 @@ Together they mean a trip read in `stop_order` is always a valid itinerary, whic
 | Decision | Choice | Reason |
 |----------|--------|--------|
 | Saved places | Table `weather.favourite_places` with `UNIQUE(user_id, location_id)` and FKs | Fixed shape, points at another table: the database guarantees no duplicates and no dangling ids, and "how many users saved Prague" is a plain `GROUP BY`. A JSONB array on the user would lose all of that |
-| User preferences | `auth.users.preferences JSONB`, validated by a Pydantic model | Small, optional, belongs to the user, nothing references it, and new settings need no migration. The right job for JSONB |
+| User preferences | `auth.users.preferences JSONB`, validated by a Pydantic model; only the chosen fields are stored, changed with one atomic `UPDATE` (`(preferences \|\| set) - removed`) | Small, optional, belongs to the user, nothing references it, and new settings need no migration. The right job for JSONB. Read from the user row that login checks load anyway, so no cache is needed. A weather request without `units` uses the saved units and is answered with `Cache-Control: private` |
 | Places | Stored once in `weather.locations`, keyed by the GeoNames id, upserted from geocoding results | Stable ids for REST resources (`/locations/{id}`), and trips, saved places and statistics all reference the same row. Both providers return GeoNames ids, so no separate provider id is needed |
 | Place names | `weather.location_names`, one row per place and language | Names differ per language (Kyiv / Київ). A place is the same in every language, so the coordinates stay in one row that everything references; a language not stored yet is fetched once and added |
 | Trip stops | Required dates; `stop_order` with `UNIQUE(trip_id, stop_order)`; stays may share only a boundary day | See "Trip stops" below |

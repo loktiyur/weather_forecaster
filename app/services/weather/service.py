@@ -6,6 +6,7 @@ from pydantic import TypeAdapter
 from app.core.cache.aside import get_or_load
 from app.core.cache.base import Cache
 from app.core.language import Language
+from app.core.units import Units
 from app.services.weather import cache_keys
 from app.services.weather.cache_keys import CacheTtls
 from app.services.weather.errors import LocationNotFoundError
@@ -18,7 +19,6 @@ from app.services.weather.schemas import (
     ForecastResponse,
     Location,
     UnitLabels,
-    Units,
 )
 from app.services.weather.weather_codes import describe_weather_code
 

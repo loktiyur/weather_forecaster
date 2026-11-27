@@ -5,10 +5,11 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 
 from app.core.language import Language
+from app.core.units import Units
 from app.services.weather.dependencies import get_weather_service
 from app.services.weather.providers.base import GeocodingClient, SearchResult
 from app.services.weather.providers.geonames_geocoding import GeoNamesGeocodingClient
-from app.services.weather.schemas import CurrentWeather, DailyForecastDay, Location, Units
+from app.services.weather.schemas import CurrentWeather, DailyForecastDay, Location
 from app.services.weather.service import WeatherService
 from tests.fixtures import load_fixture
 from tests.logs import json_logs
@@ -267,15 +268,42 @@ async def test_second_request_is_served_from_cache(
     ("path", "fixture", "max_age"),
     [(CURRENT, "forecast_current", 600), (FORECAST, "forecast_daily", 3600)],
 )
+@pytest.mark.parametrize(
+    ("units", "visibility"),
+    # Without `units` the answer may depend on the login cookie: no shared proxy may keep it.
+    [("metric", "public"), (None, "private")],
+)
 async def test_success_responses_carry_cache_control(
-    client: AsyncClient, respx_mock: respx.MockRouter, path: str, fixture: str, max_age: int
+    client: AsyncClient,
+    respx_mock: respx.MockRouter,
+    path: str,
+    fixture: str,
+    max_age: int,
+    units: str | None,
+    visibility: str,
 ) -> None:
     mock_geocoding(respx_mock)
     mock_forecast(respx_mock, fixture)
+    params: dict[str, str | int] = {"city": "Prague", "days": 3}
+    if units:
+        params["units"] = units
 
-    response = await client.get(path, params={"city": "Prague", "days": 3})
+    response = await client.get(path, params=params)
 
-    assert response.headers["cache-control"] == f"public, max-age={max_age}"
+    assert response.headers["cache-control"] == f"{visibility}, max-age={max_age}"
+
+
+async def test_guests_get_metric_without_units(
+    client: AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    """No login cookie: metric, and the database is never asked (it is a stub here)."""
+    mock_geocoding(respx_mock)
+    forecast = mock_forecast(respx_mock, "forecast_current")
+
+    response = await client.get(CURRENT, params={"city": "Prague"})
+
+    assert response.json()["units"]["temperature"] == "°C"
+    assert forecast.calls.last.request.url.params.get("temperature_unit") != "fahrenheit"
 
 
 async def test_error_responses_have_no_cache_control(

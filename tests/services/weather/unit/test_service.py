@@ -5,10 +5,11 @@ from typing import Any
 import pytest
 
 from app.core.language import Language
+from app.core.units import Units
 from app.services.weather.cache_keys import CacheTtls
 from app.services.weather.errors import CityNotFoundError, LocationNotFoundError, NotACityError
 from app.services.weather.providers.base import GeocodingClient, SearchResult
-from app.services.weather.schemas import CurrentWeather, DailyForecastDay, Location, Units
+from app.services.weather.schemas import CurrentWeather, DailyForecastDay, Location
 from app.services.weather.service import WeatherService
 from tests.doubles import (
     InMemoryCache,

@@ -14,6 +14,11 @@
         "summary": "Current weather for a city",
         "description": "Resolves the city name to a place and returns its current weather.\n\nThe resolved `location` is part of the response, so the client can show\n*which* place was used for ambiguous names. `country` + `region` select one of\nseveral same-name places; `id` (from `/locations/search`) selects exactly one.",
         "operationId": "get_current_weather_api_v1_weather_current_get",
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "parameters": [
           {
             "name": "city",
@@ -121,11 +126,18 @@
             "in": "query",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/Units",
-              "description": "`metric` (°C, km/h) or `imperial` (°F, mph)",
-              "default": "metric"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Units"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`metric` (°C, km/h) or `imperial` (°F, mph). Not given: the logged-in user's saved units, otherwise `metric`",
+              "title": "Units"
             },
-            "description": "`metric` (°C, km/h) or `imperial` (°F, mph)"
+            "description": "`metric` (°C, km/h) or `imperial` (°F, mph). Not given: the logged-in user's saved units, otherwise `metric`"
           }
         ],
         "responses": {
@@ -200,6 +212,11 @@
         "summary": "Daily forecast for a city",
         "description": "Daily min/max temperature, humidity, sunrise and sunset for 1 to 16 days, starting today.",
         "operationId": "get_forecast_api_v1_weather_forecast_get",
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ],
         "parameters": [
           {
             "name": "city",
@@ -307,11 +324,18 @@
             "in": "query",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/Units",
-              "description": "`metric` (°C, km/h) or `imperial` (°F, mph)",
-              "default": "metric"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Units"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`metric` (°C, km/h) or `imperial` (°F, mph). Not given: the logged-in user's saved units, otherwise `metric`",
+              "title": "Units"
             },
-            "description": "`metric` (°C, km/h) or `imperial` (°F, mph)"
+            "description": "`metric` (°C, km/h) or `imperial` (°F, mph). Not given: the logged-in user's saved units, otherwise `metric`"
           },
           {
             "name": "days",
@@ -748,6 +772,63 @@
           },
           "401": {
             "description": "Not logged in, or the login expired (`UNAUTHORIZED`); for login: wrong email or password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/preferences": {
+      "patch": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Change my preferences",
+        "description": "Changes only the fields sent: `{\"units\": \"imperial\"}` keeps the language, and\n`{\"units\": null}` removes the choice (the default applies again). Returns all preferences.",
+        "operationId": "update_preferences_api_v1_me_preferences_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferencesUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preferences"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in, or the login expired (`UNAUTHORIZED`); for login: wrong email or password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request body",
             "content": {
               "application/json": {
                 "schema": {
@@ -1343,6 +1424,65 @@
         ],
         "title": "LoginRequest"
       },
+      "Preferences": {
+        "properties": {
+          "units": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Units"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Used by the weather endpoints when `units` is not given"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Language"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Interface language"
+          }
+        },
+        "type": "object",
+        "title": "Preferences",
+        "description": "What the user chose; `null`: not chosen, the app's default applies.\n\nStored in `auth.users.preferences` (JSONB) with only the chosen fields, so a changed\ndefault reaches everyone who never chose."
+      },
+      "PreferencesUpdate": {
+        "properties": {
+          "units": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Units"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Used by the weather endpoints when `units` is not given"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Language"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Interface language"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PreferencesUpdate",
+        "description": "Only the fields sent change; `null` removes a choice. Unknown fields are refused."
+      },
       "ReadinessResponse": {
         "properties": {
           "status": {
@@ -1450,13 +1590,17 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "preferences": {
+            "$ref": "#/components/schemas/Preferences"
           }
         },
         "type": "object",
         "required": [
           "id",
           "email",
-          "created_at"
+          "created_at",
+          "preferences"
         ],
         "title": "UserResponse",
         "description": "The logged-in user. Never contains the password hash."

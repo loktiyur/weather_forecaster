@@ -1,7 +1,11 @@
 """Registering and logging in: the users table and the password checks."""
 
+import uuid
+from typing import Any
+
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import Text, literal, select, update
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,3 +34,30 @@ async def authenticate(session: AsyncSession, email: str, password: str) -> User
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong email or password.")
     assert user is not None  # verify_password is False without a user
     return user
+
+
+async def update_preferences(
+    session: AsyncSession, user_id: uuid.UUID, changes: dict[str, Any]
+) -> dict[str, Any]:
+    """Applies `changes` (a value: set it, None: remove it) and returns the stored preferences.
+
+    One UPDATE, `(preferences || set) - removed`, so two parallel changes of different
+    fields both survive (no read-modify-write in Python).
+    """
+    chosen = {key: value for key, value in changes.items() if value is not None}
+    removed = [key for key, value in changes.items() if value is None]
+    # self_group(): parentheses around the `||`. Postgres binds `-` tighter, and without them
+    # `a || b - c` would remove the keys from `b` only, never from the stored value.
+    new_value = (
+        UserRow.preferences.op("||")(literal(chosen, JSONB))
+        .self_group()
+        .op("-")(literal(removed, ARRAY(Text)))
+    )
+    async with session.begin():
+        stored = await session.scalar(
+            update(UserRow)
+            .where(UserRow.id == user_id)
+            .values(preferences=new_value)
+            .returning(UserRow.preferences)
+        )
+    return stored or {}
