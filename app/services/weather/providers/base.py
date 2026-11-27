@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.core.language import Language
+from app.core.units import Units
 from app.services.weather.errors import CityNotFoundError, NotACityError, NotSupportedError
-from app.services.weather.schemas import CurrentWeather, DailyForecastDay, Location, Units
+from app.services.weather.schemas import CurrentWeather, DailyForecastDay, Location
 
 # The most places /locations/search returns. A region lookup scans the same number of
 # candidates, so every place the search shows can be selected again by name + country + region.

@@ -6,12 +6,12 @@ import respx
 
 from app.core.config import Settings
 from app.core.exceptions import UpstreamServiceError
+from app.core.units import Units
 from app.services.weather.providers.open_meteo_weather import (
     CURRENT_VARIABLES,
     DAILY_VARIABLES,
     OpenMeteoWeatherClient,
 )
-from app.services.weather.schemas import Units
 from tests.fixtures import load_fixture
 
 URL = Settings.model_fields["open_meteo_forecast_url"].default

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from app.core.config import Settings
 from app.core.language import Language
-from app.services.weather.schemas import Units
+from app.core.units import Units
 
 
 @dataclass(frozen=True)

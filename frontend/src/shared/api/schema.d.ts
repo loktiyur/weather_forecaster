@@ -171,6 +171,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change my preferences
+         * @description Changes only the fields sent: `{"units": "imperial"}` keeps the language, and
+         *     `{"units": null}` removes the choice (the default applies again). Returns all preferences.
+         */
+        patch: operations["update_preferences_api_v1_me_preferences_patch"];
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -461,6 +482,29 @@ export interface components {
              */
             password: string;
         };
+        /**
+         * Preferences
+         * @description What the user chose; `null`: not chosen, the app's default applies.
+         *
+         *     Stored in `auth.users.preferences` (JSONB) with only the chosen fields, so a changed
+         *     default reaches everyone who never chose.
+         */
+        Preferences: {
+            /** @description Used by the weather endpoints when `units` is not given */
+            units?: components["schemas"]["Units"] | null;
+            /** @description Interface language */
+            language?: components["schemas"]["Language"] | null;
+        };
+        /**
+         * PreferencesUpdate
+         * @description Only the fields sent change; `null` removes a choice. Unknown fields are refused.
+         */
+        PreferencesUpdate: {
+            /** @description Used by the weather endpoints when `units` is not given */
+            units?: components["schemas"]["Units"] | null;
+            /** @description Interface language */
+            language?: components["schemas"]["Language"] | null;
+        };
         /** ReadinessResponse */
         ReadinessResponse: {
             /**
@@ -528,6 +572,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            preferences: components["schemas"]["Preferences"];
         };
     };
     responses: never;
@@ -551,8 +596,8 @@ export interface operations {
                 region?: string | null;
                 /** @description Language of place names, weather descriptions and unit labels */
                 lang?: components["schemas"]["Language"];
-                /** @description `metric` (°C, km/h) or `imperial` (°F, mph) */
-                units?: components["schemas"]["Units"];
+                /** @description `metric` (°C, km/h) or `imperial` (°F, mph). Not given: the logged-in user's saved units, otherwise `metric` */
+                units?: components["schemas"]["Units"] | null;
             };
             header?: never;
             path?: never;
@@ -629,8 +674,8 @@ export interface operations {
                 region?: string | null;
                 /** @description Language of place names, weather descriptions and unit labels */
                 lang?: components["schemas"]["Language"];
-                /** @description `metric` (°C, km/h) or `imperial` (°F, mph) */
-                units?: components["schemas"]["Units"];
+                /** @description `metric` (°C, km/h) or `imperial` (°F, mph). Not given: the logged-in user's saved units, otherwise `metric` */
+                units?: components["schemas"]["Units"] | null;
                 /** @description Number of days, including today */
                 days?: number;
             };
@@ -945,6 +990,48 @@ export interface operations {
             };
             /** @description Not logged in, or the login expired (`UNAUTHORIZED`); for login: wrong email or password */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_preferences_api_v1_me_preferences_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreferencesUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preferences"];
+                };
+            };
+            /** @description Not logged in, or the login expired (`UNAUTHORIZED`); for login: wrong email or password */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Invalid request body */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

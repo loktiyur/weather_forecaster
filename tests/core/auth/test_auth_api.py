@@ -1,42 +1,20 @@
 """The auth endpoints and dependencies, against the real test Postgres."""
 
 import uuid
-from collections.abc import AsyncIterator
 
 import pytest
 from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.auth.router import COOKIE_NAME
 from app.core.auth.security import create_token
 from app.core.config import DEV_JWT_SECRET, Settings
-from app.core.db import Database, get_database
-from app.main import create_app
+from app.core.db import Database
+from tests.core.auth.conftest import ANNA, LOGIN, LOGOUT, ME, REGISTER
 
 pytestmark = pytest.mark.postgres
-
-REGISTER = "/api/v1/auth/register"
-LOGIN = "/api/v1/auth/login"
-LOGOUT = "/api/v1/auth/logout"
-ME = "/api/v1/me"
-ANNA = {"email": "anna@example.com", "password": "correct horse"}
-
-
-@pytest.fixture
-def app(settings: Settings, clean_database: Database) -> FastAPI:
-    application = create_app(settings)
-    application.dependency_overrides[get_database] = lambda: clean_database
-    return application
-
-
-@pytest.fixture
-async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
-    # https: the cookie is Secure, so a client on http:// would never send it back.
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="https://test") as ac:
-        yield ac
 
 
 async def test_register_creates_the_account_and_logs_in(client: AsyncClient) -> None:
@@ -45,7 +23,7 @@ async def test_register_creates_the_account_and_logs_in(client: AsyncClient) -> 
     assert response.status_code == 201
     body = response.json()
     assert body["email"] == "anna@example.com"
-    assert set(body) == {"id", "email", "created_at"}  # never the password hash
+    assert set(body) == {"id", "email", "created_at", "preferences"}  # never the password hash
     me = await client.get(ME)
     assert me.status_code == 200
     assert me.json() == body

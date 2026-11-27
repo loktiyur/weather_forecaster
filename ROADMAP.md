@@ -269,9 +269,10 @@ Branch: `phase-9.1-auth-backend` · PR title `feat: …` (minor release)
 ### 9.2 — Preferences backend
 Branch: `phase-9.2-preferences-backend` · PR title `feat: …` (minor release)
 
-- [ ] `PATCH /api/v1/me/preferences`: validated by a Pydantic model (units, language, home place), stored in `auth.users.preferences`; `GET /me` returns them
-- [ ] Weather endpoints use the logged-in user's units when `units` is not given (`optional_user`); guests keep the default
-- [ ] Tests: validation (`422`), partial updates keep the other preferences, weather units for users and guests
+- [x] `PATCH /api/v1/me/preferences`: validated by a Pydantic model (units, language), stored in `auth.users.preferences`; `GET /me` returns them. Only the chosen fields are stored; `null` removes a choice; one atomic `UPDATE`, so parallel changes of different fields both survive
+- [x] `Units` moved to `app/core/units.py` (next to `Language`), so `core/auth` can use it without importing the weather service
+- [x] Weather endpoints use the logged-in user's units when `units` is not given; guests keep the default. The user is loaded only then (`UserLoaderDep`), and such answers carry `Cache-Control: private`
+- [x] Tests: validation (`422`), partial updates keep the other preferences, `null`, parallel updates, weather units for users and guests, `public` / `private` caching
 
 **CI additions:** none beyond new tests
 
@@ -329,6 +330,7 @@ Branch: `phase-12-places`
 - [ ] In the weather service: table `weather.favourite_places` (user, location, position, nickname, `UNIQUE(user_id, location_id)`)
 - [ ] `GET/POST/PATCH/DELETE /api/v1/me/places`
 - [ ] `GET /api/v1/me/dashboard`: current weather for all my places, fetched concurrently (`asyncio.gather`)
+- [ ] Home place: one of my places marked as home (the dashboard and the search page start with it)
 - [ ] Frontend (`features/weather/`): dashboard page, "save place" button on the search page
 - [ ] README and screenshots updated, `CHANGELOG.md`
 - [ ] Tag `v2.0.0`

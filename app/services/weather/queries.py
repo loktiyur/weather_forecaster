@@ -5,8 +5,8 @@ from typing import Annotated, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.language import Language
+from app.core.units import Units
 from app.services.weather.providers.base import MAX_SEARCH_RESULTS
-from app.services.weather.schemas import Units
 
 CountryCode = Annotated[
     str | None,
@@ -69,8 +69,10 @@ class WeatherQuery(_QueryModel):
         examples=["Texas"],
     )
     lang: Lang = Language.EN
-    units: Units = Field(
-        default=Units.METRIC, description="`metric` (°C, km/h) or `imperial` (°F, mph)"
+    units: Units | None = Field(
+        default=None,
+        description="`metric` (°C, km/h) or `imperial` (°F, mph). Not given: the logged-in "
+        "user's saved units, otherwise `metric`",
     )
 
     @model_validator(mode="after")

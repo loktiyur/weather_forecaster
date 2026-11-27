@@ -1,11 +1,11 @@
 from app.core.config import Settings
+from app.core.units import Units
 from app.services.weather.cache_keys import (
     CacheTtls,
     current_weather_key,
     forecast_key,
     geocoding_key,
 )
-from app.services.weather.schemas import Units
 
 
 def test_geocoding_key_is_normalised() -> None:

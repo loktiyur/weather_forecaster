@@ -1,9 +1,9 @@
 import datetime as dt
-from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 from app.core.language import Language
+from app.core.units import Units
 
 
 class Location(BaseModel):
@@ -32,11 +32,6 @@ class LocationSearchResponse(BaseModel):
     """Wrapped in an object (not a bare list) so fields can be added without breaking clients."""
 
     results: list[Location]
-
-
-class Units(StrEnum):
-    METRIC = "metric"
-    IMPERIAL = "imperial"
 
 
 class CurrentWeather(BaseModel):

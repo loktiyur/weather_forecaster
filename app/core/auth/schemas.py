@@ -3,6 +3,9 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.core.language import Language
+from app.core.units import Units
+
 
 class LoginRequest(BaseModel):
     email: EmailStr = Field(examples=["anna@example.com"])
@@ -36,6 +39,25 @@ class RegisterRequest(LoginRequest):
         return value
 
 
+class Preferences(BaseModel):
+    """What the user chose; `null`: not chosen, the app's default applies.
+
+    Stored in `auth.users.preferences` (JSONB) with only the chosen fields, so a changed
+    default reaches everyone who never chose.
+    """
+
+    units: Units | None = Field(
+        default=None, description="Used by the weather endpoints when `units` is not given"
+    )
+    language: Language | None = Field(default=None, description="Interface language")
+
+
+class PreferencesUpdate(Preferences):
+    """Only the fields sent change; `null` removes a choice. Unknown fields are refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class UserResponse(BaseModel):
     """The logged-in user. Never contains the password hash."""
 
@@ -44,3 +66,4 @@ class UserResponse(BaseModel):
     id: uuid.UUID
     email: str = Field(examples=["anna@example.com"])
     created_at: dt.datetime
+    preferences: Preferences

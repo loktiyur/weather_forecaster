@@ -2,6 +2,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Path, Query, Response
 
+from app.core.auth.router import UserLoader, UserLoaderDep
+from app.core.auth.schemas import Preferences
+from app.core.units import Units
 from app.services.weather.dependencies import WeatherServiceDep
 from app.services.weather.errors import error_docs
 from app.services.weather.queries import (
@@ -21,9 +24,26 @@ weather = APIRouter(prefix="/weather", tags=["weather"])
 locations = APIRouter(prefix="/locations", tags=["locations"])
 
 
-def cache_control(max_age_seconds: int) -> str:
-    """Lets browsers and proxies reuse the response for as long as our own cache does."""
-    return f"public, max-age={max_age_seconds}"
+def cache_control(max_age_seconds: int, *, personal: bool = False) -> str:
+    """Lets browsers and proxies reuse the response for as long as our own cache does.
+
+    `personal`: the answer depends on who is logged in, so only the user's own browser may
+    keep it, never a shared proxy.
+    """
+    return f"{'private' if personal else 'public'}, max-age={max_age_seconds}"
+
+
+async def resolve_units(requested: Units | None, load_user: UserLoader) -> tuple[Units, bool]:
+    """The units to answer in, and whether they depend on the caller (a personal answer).
+
+    `units` in the URL wins and is the same for everyone. Without it: the logged-in user's
+    saved units, otherwise metric. Only then is the user loaded from the database.
+    """
+    if requested is not None:
+        return requested, False
+    user = await load_user()
+    saved = Preferences.model_validate(user.preferences).units if user else None
+    return saved or Units.METRIC, True
 
 
 @weather.get(
@@ -33,7 +53,10 @@ def cache_control(max_age_seconds: int) -> str:
     responses=error_docs(404, 422, 501, 502, 504),
 )
 async def get_current_weather(
-    query: Annotated[WeatherQuery, Query()], service: WeatherServiceDep, response: Response
+    query: Annotated[WeatherQuery, Query()],
+    service: WeatherServiceDep,
+    load_user: UserLoaderDep,
+    response: Response,
 ) -> CurrentWeatherResponse:
     """Resolves the city name to a place and returns its current weather.
 
@@ -41,15 +64,16 @@ async def get_current_weather(
     *which* place was used for ambiguous names. `country` + `region` select one of
     several same-name places; `id` (from `/locations/search`) selects exactly one.
     """
+    units, personal = await resolve_units(query.units, load_user)
     result = await service.get_current(
         query.city,
         location_id=query.id,
         country_code=query.country,
         region=query.region,
         language=query.lang,
-        units=query.units,
+        units=units,
     )
-    response.headers["Cache-Control"] = cache_control(service.ttls.current)
+    response.headers["Cache-Control"] = cache_control(service.ttls.current, personal=personal)
     return result
 
 
@@ -60,9 +84,13 @@ async def get_current_weather(
     responses=error_docs(404, 422, 501, 502, 504),
 )
 async def get_forecast(
-    query: Annotated[ForecastQuery, Query()], service: WeatherServiceDep, response: Response
+    query: Annotated[ForecastQuery, Query()],
+    service: WeatherServiceDep,
+    load_user: UserLoaderDep,
+    response: Response,
 ) -> ForecastResponse:
     """Daily min/max temperature, humidity, sunrise and sunset for 1 to 16 days, starting today."""
+    units, personal = await resolve_units(query.units, load_user)
     result = await service.get_forecast(
         query.city,
         location_id=query.id,
@@ -70,9 +98,9 @@ async def get_forecast(
         region=query.region,
         language=query.lang,
         days=query.days,
-        units=query.units,
+        units=units,
     )
-    response.headers["Cache-Control"] = cache_control(service.ttls.forecast)
+    response.headers["Cache-Control"] = cache_control(service.ttls.forecast, personal=personal)
     return result
 
 

@@ -4,6 +4,7 @@ The login token is a JWT in an httpOnly cookie: page scripts cannot read it, and
 sends it to the API (same origin) by itself.
 """
 
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -13,10 +14,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import errors
 from app.core.auth import service
 from app.core.auth.models import UserRow
-from app.core.auth.schemas import LoginRequest, RegisterRequest, UserResponse
+from app.core.auth.schemas import (
+    LoginRequest,
+    Preferences,
+    PreferencesUpdate,
+    RegisterRequest,
+    UserResponse,
+)
 from app.core.auth.security import create_token, read_token
 from app.core.config import Settings
-from app.core.db import get_session
+from app.core.db import Database, get_database, get_session
 
 COOKIE_NAME = "access_token"
 COOKIE_PATH = "/api"  # the API only: the cookie is not sent with page and asset requests
@@ -25,6 +32,7 @@ COOKIE_PATH = "/api"  # the API only: the cookie is not sent with page and asset
 _cookie = APIKeyCookie(name=COOKIE_NAME, auto_error=False)
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+DatabaseDep = Annotated[Database, Depends(get_database)]
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -35,13 +43,32 @@ def get_app_settings(request: Request) -> Settings:
 SettingsDep = Annotated[Settings, Depends(get_app_settings)]
 
 
-async def optional_user(
-    token: Annotated[str | None, Depends(_cookie)], session: SessionDep, settings: SettingsDep
-) -> UserRow | None:
+UserLoader = Callable[[], Awaitable[UserRow | None]]
+
+
+def user_loader(
+    token: Annotated[str | None, Depends(_cookie)], database: DatabaseDep, settings: SettingsDep
+) -> UserLoader:
+    """Loads the logged-in user only when called: an endpoint that needs the user only in some
+    cases (weather without `units`) does not query the database in the others."""
+
+    async def load() -> UserRow | None:
+        user_id = read_token(token, settings.jwt_secret) if token else None
+        if user_id is None:
+            return None  # a guest, or an expired or invalid token: no database query
+        async with database.sessions() as session:
+            # A token can outlive its user: a deleted account counts as not logged in.
+            return await session.get(UserRow, user_id)
+
+    return load
+
+
+UserLoaderDep = Annotated[UserLoader, Depends(user_loader)]
+
+
+async def optional_user(load: UserLoaderDep) -> UserRow | None:
     """The logged-in user, or None for guests (and for expired or invalid tokens)."""
-    user_id = read_token(token, settings.jwt_secret) if token else None
-    # A token can outlive its user: a deleted account counts as not logged in.
-    return await session.get(UserRow, user_id) if user_id else None
+    return await load()
 
 
 async def current_user(user: Annotated[UserRow | None, Depends(optional_user)]) -> UserRow:
@@ -122,3 +149,19 @@ async def logout(response: Response, settings: SettingsDep) -> None:
 )
 async def me(user: CurrentUser) -> UserResponse:
     return UserResponse.model_validate(user)
+
+
+@router.patch(
+    "/me/preferences",
+    response_model=Preferences,
+    summary="Change my preferences",
+    responses=error_docs(401, 422),
+)
+async def update_preferences(
+    body: PreferencesUpdate, user: CurrentUser, session: SessionDep
+) -> Preferences:
+    """Changes only the fields sent: `{"units": "imperial"}` keeps the language, and
+    `{"units": null}` removes the choice (the default applies again). Returns all preferences."""
+    changes = body.model_dump(mode="json", include=body.model_fields_set)
+    stored = await service.update_preferences(session, user.id, changes)
+    return Preferences.model_validate(stored)
